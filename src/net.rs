@@ -1,0 +1,226 @@
+use crate::proto::{classify, would_block, PacketKind, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
+use crate::punch;
+use anyhow::{anyhow, Result};
+use log::{info, warn};
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+use stunclient::StunClient;
+
+/// Messages from the UI thread to the network worker.
+pub enum Command {
+    PeerCode(SocketAddr),
+    Send(String),
+    Quit,
+}
+
+/// Messages from the network worker to the UI thread.
+pub enum Event {
+    Discovered(SocketAddr),
+    Connected(SocketAddr),
+    Incoming(String),
+    PeerLeft,
+    Fatal(String),
+}
+
+const POLL: Duration = Duration::from_millis(200);
+const KEEPALIVE_TICKS: u32 = 75; // 75 * 200ms = 15s
+
+/// Truncate a chat line to the wire limit on a UTF-8 char boundary, so a
+/// multi-byte char straddling the limit is never split (which would make the
+/// receiver's `from_utf8` fail and silently drop the message).
+pub fn encode_chat(line: &str) -> Vec<u8> {
+    let mut end = MAX_CHAT_BYTES.min(line.len());
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end].as_bytes().to_vec()
+}
+
+/// Query our public endpoint via STUN, retrying up to 3× (UDP can drop the
+/// request) before giving up.
+pub fn discover(sock: &UdpSocket, stun: SocketAddr) -> Result<SocketAddr> {
+    let client = StunClient::new(stun);
+    let mut last = None;
+    for attempt in 1..=3 {
+        match client.query_external_address(sock) {
+            Ok(addr) => return Ok(addr),
+            Err(e) => {
+                warn!("stun: attempt {attempt}/3 failed: {e}");
+                last = Some(e.to_string());
+            }
+        }
+    }
+    Err(anyhow!(
+        "STUN query failed after 3 tries ({}) — check your network or try \
+         another server with --stun <host:port>",
+        last.unwrap_or_default()
+    ))
+}
+
+/// Spawn the network worker. Returns its join handle plus the channel ends the
+/// UI uses to command it and receive its events.
+pub fn spawn(stun: SocketAddr) -> (JoinHandle<()>, Sender<Command>, Receiver<Event>) {
+    let (cmd_tx, cmd_rx) = channel::<Command>();
+    let (evt_tx, evt_rx) = channel::<Event>();
+    let handle = thread::spawn(move || worker(stun, cmd_rx, evt_tx));
+    (handle, cmd_tx, evt_rx)
+}
+
+fn worker(stun: SocketAddr, cmds: Receiver<Command>, events: Sender<Event>) {
+    let sock = match UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = events.send(Event::Fatal(format!("failed to bind a UDP socket: {e}")));
+            return;
+        }
+    };
+    info!(
+        "socket: bound to {}",
+        sock.local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| "?".into())
+    );
+
+    let my = match discover(&sock, stun) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = events.send(Event::Fatal(e.to_string()));
+            return;
+        }
+    };
+    info!("stun: discovered public endpoint {my}");
+    let _ = events.send(Event::Discovered(my));
+
+    // Wait for the peer code (or an early quit / UI gone).
+    let code = loop {
+        match cmds.recv() {
+            Ok(Command::PeerCode(c)) => break c,
+            Ok(Command::Quit) | Err(_) => return,
+            Ok(_) => {} // ignore Send before we're connected
+        }
+    };
+
+    let (peer, early) = match punch::punch(&sock, code) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = events.send(Event::Fatal(e.to_string()));
+            return;
+        }
+    };
+    info!("connected to {peer}");
+    let _ = events.send(Event::Connected(peer));
+    for m in early {
+        let _ = events.send(Event::Incoming(m));
+    }
+
+    session(sock, peer, cmds, events);
+}
+
+/// The post-connect bridge loop: forward outgoing `Send`s onto the socket,
+/// surface incoming chat/BYE as events, and refresh the NAT mapping on a timer.
+/// Factored out so a loopback test can drive it without STUN/punch.
+pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, events: Sender<Event>) {
+    let _ = sock.set_read_timeout(Some(POLL));
+    let mut buf = [0u8; RECV_BUF];
+    let mut ticks = 0u32;
+
+    loop {
+        // Drain outgoing commands.
+        loop {
+            match cmds.try_recv() {
+                Ok(Command::Send(line)) => {
+                    let _ = sock.send_to(&encode_chat(&line), peer);
+                }
+                Ok(Command::Quit) => {
+                    let _ = sock.send_to(BYE, peer);
+                    return;
+                }
+                Ok(Command::PeerCode(_)) => {} // already connected; ignore
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    let _ = sock.send_to(BYE, peer);
+                    return;
+                }
+            }
+        }
+
+        // One inbound read (peer IP filter, as in the old chat loop).
+        match sock.recv_from(&mut buf) {
+            Ok((n, from)) if from.ip() == peer.ip() => match classify(&buf[..n]) {
+                PacketKind::Chat => {
+                    if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                        if events.send(Event::Incoming(s.to_string())).is_err() {
+                            return; // UI gone
+                        }
+                    }
+                }
+                PacketKind::Bye => {
+                    let _ = events.send(Event::PeerLeft);
+                    // Keep running so the user can read history and quit cleanly.
+                }
+                _ => {}
+            },
+            Ok(_) => {}
+            Err(e) if would_block(&e) => {}
+            Err(_) => return,
+        }
+
+        ticks += 1;
+        if ticks >= KEEPALIVE_TICKS {
+            let _ = sock.send_to(KEEPALIVE, peer);
+            ticks = 0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_chat_truncates_on_char_boundary() {
+        // 600 × 'é' (2 bytes each) = 1200 bytes, over the 1024 limit.
+        let line = "é".repeat(600);
+        let bytes = encode_chat(&line);
+        assert!(bytes.len() <= MAX_CHAT_BYTES);
+        // Must still be valid UTF-8 — never split a multi-byte char.
+        assert!(std::str::from_utf8(&bytes).is_ok());
+        // 1024 is odd vs 2-byte chars, so it lands on 1024-1 = 1023? No: the
+        // last whole 'é' ends at an even offset ≤ 1024, i.e. 1024.
+        assert_eq!(bytes.len() % 2, 0);
+    }
+
+    #[test]
+    fn encode_chat_passes_short_lines_through() {
+        assert_eq!(encode_chat("hi bro"), b"hi bro");
+    }
+
+    #[test]
+    fn session_delivers_message_over_loopback() {
+        let a = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let a_addr = a.local_addr().unwrap();
+        let b_addr = b.local_addr().unwrap();
+
+        let (a_cmd_tx, a_cmd_rx) = channel();
+        let (a_evt_tx, _a_evt_rx) = channel();
+        let (b_cmd_tx, b_cmd_rx) = channel();
+        let (b_evt_tx, b_evt_rx) = channel();
+
+        let ha = thread::spawn(move || session(a, b_addr, a_cmd_rx, a_evt_tx));
+        let hb = thread::spawn(move || session(b, a_addr, b_cmd_rx, b_evt_tx));
+
+        a_cmd_tx.send(Command::Send("hello bro".into())).unwrap();
+        match b_evt_rx.recv_timeout(Duration::from_secs(2)).unwrap() {
+            Event::Incoming(s) => assert_eq!(s, "hello bro"),
+            _ => panic!("expected Incoming"),
+        }
+
+        a_cmd_tx.send(Command::Quit).unwrap();
+        b_cmd_tx.send(Command::Quit).unwrap();
+        let _ = ha.join();
+        let _ = hb.join();
+    }
+}

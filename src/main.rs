@@ -1,13 +1,14 @@
 mod chat;
+mod net;
 mod proto;
 mod punch;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Context;
+use anyhow::Result;
 use log::info;
 use proto::parse_code;
 use std::io::{BufRead, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use stunclient::StunClient;
 
 const DEFAULT_STUN: &str = "stun.l.google.com:19302";
 
@@ -25,7 +26,7 @@ fn main() -> Result<()> {
 
     let sock = UdpSocket::bind("0.0.0.0:0").context("failed to bind a UDP socket")?;
     info!("socket: bound to {}", sock.local_addr()?);
-    let my_addr = discover(&sock, stun_addr)?;
+    let my_addr = net::discover(&sock, stun_addr)?;
     info!("stun: discovered public endpoint {my_addr}");
 
     println!("Your code: {my_addr}");
@@ -61,27 +62,6 @@ fn resolve_stun(s: &str) -> Result<SocketAddr> {
         .with_context(|| format!("could not resolve STUN server '{s}'"))?
         .find(|a| a.is_ipv4())
         .with_context(|| format!("no IPv4 address for STUN server '{s}'"))
-}
-
-/// Query our public endpoint via STUN, retrying up to 3× (UDP can drop the
-/// request) before giving up.
-fn discover(sock: &UdpSocket, stun: SocketAddr) -> Result<SocketAddr> {
-    let client = StunClient::new(stun);
-    let mut last = None;
-    for attempt in 1..=3 {
-        match client.query_external_address(sock) {
-            Ok(addr) => return Ok(addr),
-            Err(e) => {
-                log::warn!("stun: attempt {attempt}/3 failed: {e}");
-                last = Some(e.to_string());
-            }
-        }
-    }
-    Err(anyhow!(
-        "STUN query failed after 3 tries ({}) — check your network or try \
-         another server with --stun <host:port>",
-        last.unwrap_or_default()
-    ))
 }
 
 /// Read and parse the peer's code from one line of stdin.
