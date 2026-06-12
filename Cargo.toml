@@ -11,4 +11,6 @@ categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1"
+env_logger = "0.11"
+log = "0.4"
 stunclient = "0.4"

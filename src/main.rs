@@ -3,6 +3,7 @@ mod proto;
 mod punch;
 
 use anyhow::{anyhow, Context, Result};
+use log::info;
 use proto::parse_code;
 use std::io::{BufRead, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -11,21 +12,33 @@ use stunclient::StunClient;
 const DEFAULT_STUN: &str = "stun.l.google.com:19302";
 
 fn main() -> Result<()> {
+    // Logs go to stderr (chat UI stays on stdout). Default level `info`; set
+    // RUST_LOG=debug for per-packet tracing when diagnosing a failed punch.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .format_target(false)
+        .init();
+
     let stun = stun_arg().unwrap_or_else(|| DEFAULT_STUN.to_string());
     let stun_addr = resolve_stun(&stun)?;
+    info!("stun: using server {stun} ({stun_addr})");
 
     let sock = UdpSocket::bind("0.0.0.0:0").context("failed to bind a UDP socket")?;
+    info!("socket: bound to {}", sock.local_addr()?);
     let my_addr = discover(&sock, stun_addr)?;
+    info!("stun: discovered public endpoint {my_addr}");
 
     println!("Your code: {my_addr}");
     println!("Send that to your bro, then paste theirs below.\n");
 
     print!("Peer code: ");
     std::io::stdout().flush()?;
-    let peer = read_peer_code()?;
+    let code = read_peer_code()?;
+    info!("peer: advertised code {code}");
 
     println!("\nPunching through… (this can take up to a minute)");
-    let early = punch::punch(&sock, peer)?;
+    let (peer, early) = punch::punch(&sock, code)?;
+    info!("connected to {peer}");
     println!("Connected! Type messages. /quit to leave.\n");
 
     chat::chat(sock, peer, early)
@@ -55,10 +68,13 @@ fn resolve_stun(s: &str) -> Result<SocketAddr> {
 fn discover(sock: &UdpSocket, stun: SocketAddr) -> Result<SocketAddr> {
     let client = StunClient::new(stun);
     let mut last = None;
-    for _ in 0..3 {
+    for attempt in 1..=3 {
         match client.query_external_address(sock) {
             Ok(addr) => return Ok(addr),
-            Err(e) => last = Some(e.to_string()),
+            Err(e) => {
+                log::warn!("stun: attempt {attempt}/3 failed: {e}");
+                last = Some(e.to_string());
+            }
         }
     }
     Err(anyhow!(

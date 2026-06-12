@@ -21,6 +21,27 @@ prompt. Both sides should paste within ~60s of each other. Once it says
 Pick a different STUN server with `--stun host:port` (default
 `stun.l.google.com:19302`).
 
+## Debugging a failed connection
+
+`ramsit` logs to stderr. By default it prints `info` (STUN result, connect,
+and — on failure — a summary of what arrived). For a full packet-by-packet
+trace, set `RUST_LOG=debug`:
+
+    RUST_LOG=debug cargo run
+
+Have **both** sides run with `RUST_LOG=debug` and start within ~60s of each
+other. What the logs tell you when a punch fails:
+
+- **`received 0 packet(s)`** — nothing came back. The other side isn't running,
+  the code is stale (restarting prints a *new* code), you didn't start together,
+  or a local firewall is dropping UDP.
+- **`peer's real source <ip:port> differs from advertised`** — the peer's
+  packets arrive from a different port than their code. If it's stable, `ramsit`
+  retargets automatically; if the port keeps changing, that side is behind a
+  symmetric NAT and needs a relay.
+- **packets flowing both ways but no `Connected!`** — usually a timing issue;
+  re-exchange fresh codes and start simultaneously.
+
 ## Limitations
 
 - **Symmetric NATs** (many corporate / some cellular networks) assign a

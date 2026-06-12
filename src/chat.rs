@@ -1,5 +1,6 @@
 use crate::proto::{classify, would_block, PacketKind, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
 use anyhow::Result;
+use log::debug;
 use std::io::BufRead;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,12 +23,17 @@ pub fn encode_chat(line: &str) -> Vec<u8> {
 pub fn chat(sock: UdpSocket, peer: SocketAddr, early: Vec<String>) -> Result<()> {
     sock.set_read_timeout(Some(POLL))?;
     let running = Arc::new(AtomicBool::new(true));
+    debug!(
+        "chat: session with {peer} ({} buffered early lines)",
+        early.len()
+    );
 
     for m in early {
         println!("peer> {m}");
     }
 
-    // Receiver thread: print chat, handle peer BYE.
+    // Receiver thread: print chat, handle peer BYE. Match on the peer's IP (the
+    // port is stable for our session) so logging shows any odd sources.
     let rsock = sock.try_clone()?;
     let rpeer = peer;
     let rrunning = running.clone();
@@ -35,21 +41,25 @@ pub fn chat(sock: UdpSocket, peer: SocketAddr, early: Vec<String>) -> Result<()>
         let mut buf = [0u8; RECV_BUF];
         while rrunning.load(Ordering::Relaxed) {
             match rsock.recv_from(&mut buf) {
-                Ok((n, from)) if from == rpeer => match classify(&buf[..n]) {
-                    PacketKind::Chat => {
-                        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
-                            println!("peer> {s}");
+                Ok((n, from)) if from.ip() == rpeer.ip() => {
+                    let kind = classify(&buf[..n]);
+                    debug!("chat: <- {from} {kind:?} ({n} bytes)");
+                    match kind {
+                        PacketKind::Chat => {
+                            if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                                println!("peer> {s}");
+                            }
                         }
+                        PacketKind::Bye => {
+                            // Peer left; exit straight away. The process is ending,
+                            // so we intentionally skip the main thread's clean join.
+                            println!("peer disconnected");
+                            std::process::exit(0);
+                        }
+                        _ => {} // punch/ack/keepalive: ignore
                     }
-                    PacketKind::Bye => {
-                        // Peer left; exit straight away. The process is ending,
-                        // so we intentionally skip the main thread's clean join.
-                        println!("peer disconnected");
-                        std::process::exit(0);
-                    }
-                    _ => {} // punch/ack/keepalive: ignore
-                },
-                Ok(_) => {}
+                }
+                Ok((_, from)) => debug!("chat: ignoring packet from unrelated {from}"),
                 Err(e) if would_block(&e) => {}
                 Err(_) => break,
             }
@@ -66,6 +76,7 @@ pub fn chat(sock: UdpSocket, peer: SocketAddr, early: Vec<String>) -> Result<()>
             thread::sleep(POLL);
             ticks += 1;
             if ticks >= KEEPALIVE_TICKS {
+                debug!("chat: -> {kpeer} KEEPALIVE");
                 let _ = ksock.send_to(KEEPALIVE, kpeer);
                 ticks = 0;
             }
@@ -77,10 +88,13 @@ pub fn chat(sock: UdpSocket, peer: SocketAddr, early: Vec<String>) -> Result<()>
     for line in stdin.lock().lines() {
         let line = line?;
         if line == "/quit" {
+            debug!("chat: -> {peer} BYE (local /quit)");
             let _ = sock.send_to(BYE, peer);
             break;
         }
-        sock.send_to(&encode_chat(&line), peer)?;
+        let bytes = encode_chat(&line);
+        debug!("chat: -> {peer} chat ({} bytes)", bytes.len());
+        sock.send_to(&bytes, peer)?;
     }
 
     running.store(false, Ordering::Relaxed);
