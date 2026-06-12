@@ -13,21 +13,26 @@ On **both** machines run:
 
     cargo run
 
-Each side prints a code like `Your code: 203.0.113.5:54213`. Send your code to
-the other person (Signal/SMS/whatever) and paste theirs at the `Peer code:`
-prompt. Both sides should paste within ~60s of each other. Once it says
-`Connected!`, type away. `/quit` to leave.
+A full-screen TUI opens. It discovers your public code and shows it as
+`Your code: 203.0.113.5:54213`. Send your code to the other person
+(Signal/SMS/whatever) and paste theirs into the `Peer code:` field, then press
+Enter. Both sides should connect within ~60s of each other. Once connected, type
+messages and press Enter to send; PageUp/PageDown scroll the history; Esc (or
+Ctrl-C) quits.
 
 Pick a different STUN server with `--stun host:port` (default
 `stun.l.google.com:19302`).
 
 ## Debugging a failed connection
 
-`ramsit` logs to stderr. By default it prints `info` (STUN result, connect,
+`ramsit` writes logs to `ramsit.log` (the TUI owns the terminal, so logs can't
+go to the screen). By default it logs `info` (STUN result, connect,
 and — on failure — a summary of what arrived). For a full packet-by-packet
 trace, set `RUST_LOG=debug`:
 
     RUST_LOG=debug cargo run
+    # in another terminal:
+    tail -f ramsit.log
 
 Have **both** sides run with `RUST_LOG=debug` and start within ~60s of each
 other. What the logs tell you when a punch fails:
