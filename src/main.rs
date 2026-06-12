@@ -3,6 +3,7 @@ mod chat;
 mod net;
 mod proto;
 mod punch;
+mod ui;
 
 use anyhow::Context;
 use anyhow::Result;
