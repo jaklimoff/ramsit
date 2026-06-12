@@ -30,3 +30,7 @@ Pick a different STUN server with `--stun host:port` (default
   public endpoints. Use different networks.
 - **IPv4 only.**
 - Messages are plaintext UDP: no encryption, no delivery guarantee, no history.
+
+## License
+
+[MIT](LICENSE) © Jack Klimov

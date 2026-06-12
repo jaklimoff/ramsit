@@ -2,6 +2,12 @@
 name = "ramsit"
 version = "0.1.0"
 edition = "2021"
+description = "Tiny serverless P2P terminal chat over UDP with STUN NAT hole-punching"
+license = "MIT"
+repository = "https://github.com/jaklimoff/ramsit"
+readme = "README.md"
+keywords = ["p2p", "chat", "stun", "nat-traversal", "udp"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1"
