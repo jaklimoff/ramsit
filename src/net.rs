@@ -1,7 +1,7 @@
 use crate::proto::{classify, would_block, PacketKind, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
 use crate::punch;
 use anyhow::{anyhow, Result};
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
@@ -9,6 +9,7 @@ use std::time::Duration;
 use stunclient::StunClient;
 
 /// Messages from the UI thread to the network worker.
+#[derive(Debug)]
 pub enum Command {
     PeerCode(SocketAddr),
     Send(String),
@@ -16,6 +17,7 @@ pub enum Command {
 }
 
 /// Messages from the network worker to the UI thread.
+#[derive(Debug)]
 pub enum Event {
     Discovered(SocketAddr),
     Connected(SocketAddr),
@@ -131,9 +133,12 @@ pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, event
         loop {
             match cmds.try_recv() {
                 Ok(Command::Send(line)) => {
-                    let _ = sock.send_to(&encode_chat(&line), peer);
+                    let b = encode_chat(&line);
+                    debug!("session: -> {peer} chat ({} bytes)", b.len());
+                    let _ = sock.send_to(&b, peer);
                 }
                 Ok(Command::Quit) => {
+                    debug!("session: -> {peer} BYE (local quit)");
                     let _ = sock.send_to(BYE, peer);
                     return;
                 }
@@ -148,21 +153,25 @@ pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, event
 
         // One inbound read (peer IP filter, as in the old chat loop).
         match sock.recv_from(&mut buf) {
-            Ok((n, from)) if from.ip() == peer.ip() => match classify(&buf[..n]) {
-                PacketKind::Chat => {
-                    if let Ok(s) = std::str::from_utf8(&buf[..n]) {
-                        if events.send(Event::Incoming(s.to_string())).is_err() {
-                            return; // UI gone
+            Ok((n, from)) if from.ip() == peer.ip() => {
+                let kind = classify(&buf[..n]);
+                debug!("session: <- {from} {kind:?} ({n} bytes)");
+                match kind {
+                    PacketKind::Chat => {
+                        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                            if events.send(Event::Incoming(s.to_string())).is_err() {
+                                return; // UI gone
+                            }
                         }
                     }
+                    PacketKind::Bye => {
+                        let _ = events.send(Event::PeerLeft);
+                        // Keep running so the user can read history and quit cleanly.
+                    }
+                    _ => {}
                 }
-                PacketKind::Bye => {
-                    let _ = events.send(Event::PeerLeft);
-                    // Keep running so the user can read history and quit cleanly.
-                }
-                _ => {}
-            },
-            Ok(_) => {}
+            }
+            Ok((_, from)) => debug!("session: ignoring packet from unrelated {from}"),
             Err(e) if would_block(&e) => {}
             Err(_) => return,
         }

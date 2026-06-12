@@ -27,6 +27,10 @@ fn main() -> Result<()> {
     let mut app = App::new();
     let result = run(&mut terminal, &mut app, &cmd_tx, &evt_rx);
     ratatui::restore();
+    // On quit we abandon the worker, but give it a beat to flush a best-effort
+    // BYE first — it's the only way the peer learns we left (no liveness timer),
+    // and the session loop drains commands within one ~200ms poll.
+    std::thread::sleep(Duration::from_millis(300));
     result
 }
 
@@ -51,7 +55,10 @@ fn run(
 
         loop {
             match evt_rx.try_recv() {
-                Ok(ev) => app.apply(ev),
+                Ok(ev) => {
+                    log::debug!("ui: event {ev:?}");
+                    app.apply(ev);
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     app.connection_lost();

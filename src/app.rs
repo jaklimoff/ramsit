@@ -73,9 +73,10 @@ impl App {
                 } = &mut self.screen
                 {
                     messages.push(format!("peer> {s}"));
+                    // If scrolled up, shift the offset so the viewport stays on
+                    // the same messages. (Pinned at 0 stays pinned to newest.)
                     if *scroll > 0 {
-                        let max = messages.len().saturating_sub(1);
-                        *scroll = (*scroll + 1).min(max);
+                        *scroll += 1;
                     }
                 }
             }

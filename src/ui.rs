@@ -30,7 +30,9 @@ pub fn draw(f: &mut Frame, app: &App) {
             scroll,
             connected,
         } => draw_chat(f, &peer.to_string(), messages, input, *scroll, *connected),
-        Screen::Fatal { msg } => centered(f, msg, Color::Red),
+        Screen::Fatal { msg } => {
+            centered(f, &format!("{msg}\n\n(press q or Esc to quit)"), Color::Red)
+        }
     }
 }
 
@@ -81,14 +83,14 @@ fn draw_chat(
     let (history_area, input_area) = (areas[0], areas[1]);
 
     // Status bar = title of the history block.
-    let (dot, label, color) = if connected {
-        ("●", "connected", Color::Green)
+    let (label, color) = if connected {
+        ("connected", Color::Green)
     } else {
-        ("●", "disconnected", Color::Red)
+        ("disconnected", Color::Red)
     };
     let title = Line::from(vec![
         Span::raw(format!(" ramsit — peer {peer} ")),
-        Span::styled(dot, Style::default().fg(color)),
+        Span::styled("●", Style::default().fg(color)),
         Span::raw(format!(" {label} ")),
     ]);
 
