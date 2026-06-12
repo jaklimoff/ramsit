@@ -13,4 +13,5 @@ categories = ["command-line-utilities", "network-programming"]
 anyhow = "1"
 env_logger = "0.11"
 log = "0.4"
+ratatui = "0.29"
 stunclient = "0.4"
