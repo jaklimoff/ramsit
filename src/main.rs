@@ -1,3 +1,4 @@
+mod chat;
 mod proto;
 mod punch;
 
