@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 
 /// Reserved leading byte marking a control packet. UTF-8 chat text never
 /// contains a null byte, so user input can never be misclassified.
-#[allow(dead_code)]
 pub const SENTINEL: u8 = 0x00;
 
 pub const PUNCH: &[u8] = b"\x00PUNCH";
@@ -28,6 +27,10 @@ pub enum PacketKind {
 /// Map raw bytes to a packet kind. Only exact control byte-strings are
 /// control; everything else is a chat message.
 pub fn classify(buf: &[u8]) -> PacketKind {
+    // Chat text never starts with the sentinel, so short-circuit it.
+    if buf.first() != Some(&SENTINEL) {
+        return PacketKind::Chat;
+    }
     match buf {
         PUNCH => PacketKind::Punch,
         PUNCH_ACK => PacketKind::PunchAck,

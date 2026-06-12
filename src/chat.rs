@@ -42,6 +42,8 @@ pub fn chat(sock: UdpSocket, peer: SocketAddr, early: Vec<String>) -> Result<()>
                         }
                     }
                     PacketKind::Bye => {
+                        // Peer left; exit straight away. The process is ending,
+                        // so we intentionally skip the main thread's clean join.
                         println!("peer disconnected");
                         std::process::exit(0);
                     }
