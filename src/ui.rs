@@ -52,7 +52,11 @@ fn draw_exchange(f: &mut Frame, my_code: &str, input: &str, error: Option<&str>)
         ]),
         Line::from("Share it with your bro, then paste theirs below."),
         Line::from(""),
-        Line::from(vec![Span::raw("Peer code: "), Span::raw(input), Span::raw("_")]),
+        Line::from(vec![
+            Span::raw("Peer code: "),
+            Span::raw(input),
+            Span::raw("_"),
+        ]),
         Line::from(""),
         Line::from(match error {
             Some(e) => Span::styled(e, Style::default().fg(Color::Red)),
@@ -109,7 +113,10 @@ fn visible_lines(messages: &[String], height: usize, scroll: usize) -> Vec<Line<
     }
     let end = messages.len().saturating_sub(scroll);
     let start = end.saturating_sub(height);
-    messages[start..end].iter().map(|m| Line::from(m.as_str())).collect()
+    messages[start..end]
+        .iter()
+        .map(|m| Line::from(m.as_str()))
+        .collect()
 }
 
 fn place_cursor(f: &mut Frame, area: Rect, input_chars: usize) {

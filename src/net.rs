@@ -35,7 +35,7 @@ pub fn encode_chat(line: &str) -> Vec<u8> {
     while end > 0 && !line.is_char_boundary(end) {
         end -= 1;
     }
-    line[..end].as_bytes().to_vec()
+    line.as_bytes()[..end].to_vec()
 }
 
 /// Query our public endpoint via STUN, retrying up to 3× (UDP can drop the

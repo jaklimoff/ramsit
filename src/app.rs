@@ -68,7 +68,10 @@ impl App {
                 };
             }
             Event::Incoming(s) => {
-                if let Screen::Chat { messages, scroll, .. } = &mut self.screen {
+                if let Screen::Chat {
+                    messages, scroll, ..
+                } = &mut self.screen
+                {
                     messages.push(format!("peer> {s}"));
                     if *scroll > 0 {
                         let max = messages.len().saturating_sub(1);
@@ -78,7 +81,9 @@ impl App {
             }
             Event::PeerLeft => {
                 if let Screen::Chat {
-                    messages, connected, ..
+                    messages,
+                    connected,
+                    ..
                 } = &mut self.screen
                 {
                     *connected = false;
@@ -104,8 +109,8 @@ impl App {
     /// send to the worker.
     pub fn on_key(&mut self, key: KeyEvent) -> Option<Command> {
         // Global quit: Esc or Ctrl-C from any screen.
-        let ctrl_c = key.code == KeyCode::Char('c')
-            && key.modifiers.contains(KeyModifiers::CONTROL);
+        let ctrl_c =
+            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
         if key.code == KeyCode::Esc || ctrl_c {
             self.should_quit = true;
             return Some(Command::Quit);
@@ -229,7 +234,10 @@ mod tests {
         }
         let cmd = app.on_key(key(KeyCode::Enter));
         assert!(matches!(cmd, Some(Command::Send(ref s)) if s == "hello"));
-        if let Screen::Chat { messages, input, .. } = &app.screen {
+        if let Screen::Chat {
+            messages, input, ..
+        } = &app.screen
+        {
             assert_eq!(messages, &vec!["you> hello".to_string()]);
             assert!(input.is_empty());
         } else {

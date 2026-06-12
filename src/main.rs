@@ -1,50 +1,82 @@
 mod app;
-mod chat;
 mod net;
 mod proto;
 mod punch;
 mod ui;
 
-use anyhow::Context;
-use anyhow::Result;
-use log::info;
-use proto::parse_code;
-use std::io::{BufRead, Write};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use anyhow::{Context, Result};
+use app::App;
+use ratatui::crossterm::event::{self, Event as CEvent, KeyEventKind};
+use ratatui::DefaultTerminal;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::time::Duration;
 
 const DEFAULT_STUN: &str = "stun.l.google.com:19302";
 
 fn main() -> Result<()> {
-    // Logs go to stderr (chat UI stays on stdout). Default level `info`; set
-    // RUST_LOG=debug for per-packet tracing when diagnosing a failed punch.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .format_timestamp_millis()
-        .format_target(false)
-        .init();
+    init_logger()?;
 
     let stun = stun_arg().unwrap_or_else(|| DEFAULT_STUN.to_string());
     let stun_addr = resolve_stun(&stun)?;
-    info!("stun: using server {stun} ({stun_addr})");
+    log::info!("stun: using server {stun} ({stun_addr})");
 
-    let sock = UdpSocket::bind("0.0.0.0:0").context("failed to bind a UDP socket")?;
-    info!("socket: bound to {}", sock.local_addr()?);
-    let my_addr = net::discover(&sock, stun_addr)?;
-    info!("stun: discovered public endpoint {my_addr}");
+    let (_handle, cmd_tx, evt_rx) = net::spawn(stun_addr);
 
-    println!("Your code: {my_addr}");
-    println!("Send that to your bro, then paste theirs below.\n");
+    let mut terminal = ratatui::init();
+    let mut app = App::new();
+    let result = run(&mut terminal, &mut app, &cmd_tx, &evt_rx);
+    ratatui::restore();
+    result
+}
 
-    print!("Peer code: ");
-    std::io::stdout().flush()?;
-    let code = read_peer_code()?;
-    info!("peer: advertised code {code}");
+fn run(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    cmd_tx: &Sender<net::Command>,
+    evt_rx: &Receiver<net::Event>,
+) -> Result<()> {
+    loop {
+        terminal.draw(|f| ui::draw(f, app))?;
 
-    println!("\nPunching through… (this can take up to a minute)");
-    let (peer, early) = punch::punch(&sock, code)?;
-    info!("connected to {peer}");
-    println!("Connected! Type messages. /quit to leave.\n");
+        if event::poll(Duration::from_millis(100))? {
+            if let CEvent::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    if let Some(cmd) = app.on_key(key) {
+                        let _ = cmd_tx.send(cmd);
+                    }
+                }
+            }
+        }
 
-    chat::chat(sock, peer, early)
+        loop {
+            match evt_rx.try_recv() {
+                Ok(ev) => app.apply(ev),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    app.connection_lost();
+                    break;
+                }
+            }
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Logs go to a file so they never corrupt the TUI. Default level `info`; set
+/// RUST_LOG=debug for a per-packet trace. Watch with `tail -f ramsit.log`.
+fn init_logger() -> Result<()> {
+    let file = std::fs::File::create("ramsit.log").context("create ramsit.log")?;
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .target(env_logger::Target::Pipe(Box::new(file)))
+        .format_timestamp_millis()
+        .format_target(false)
+        .init();
+    Ok(())
 }
 
 /// Parse an optional `--stun <addr>` flag.
@@ -64,14 +96,4 @@ fn resolve_stun(s: &str) -> Result<SocketAddr> {
         .with_context(|| format!("could not resolve STUN server '{s}'"))?
         .find(|a| a.is_ipv4())
         .with_context(|| format!("no IPv4 address for STUN server '{s}'"))
-}
-
-/// Read and parse the peer's code from one line of stdin.
-fn read_peer_code() -> Result<SocketAddr> {
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .context("failed to read peer code from stdin")?;
-    parse_code(&line)
 }
