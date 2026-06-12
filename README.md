@@ -23,6 +23,31 @@ Ctrl-C) quits.
 Pick a different STUN server with `--stun host:port` (default
 `stun.l.google.com:19302`).
 
+## Same local network (LAN)
+
+The code the TUI shows is your *public* endpoint. When both machines sit behind
+the same router it usually won't loop back (hairpinning), so on a shared LAN you
+exchange **local** addresses instead. Hole punching isn't needed here — there's
+no NAT between you — so you just point each side straight at the other.
+
+On each machine:
+
+1. Find its LAN IP:
+   - macOS: `ipconfig getifaddr en0`
+   - Linux: `hostname -I | awk '{print $1}'`
+2. Find the UDP port `ramsit` bound (it's logged, not shown in the TUI):
+
+       grep "socket: bound" ramsit.log
+       # socket: bound to 0.0.0.0:54321   -> your local port is 54321
+
+Your LAN code is then `<LAN-IP>:<port>`, e.g. `192.168.1.42:54321`. Send that to
+the other person and paste *their* LAN code into `Peer code:` — instead of the
+public codes the TUI displays. Everything after connecting works the same.
+
+Note: `ramsit` still queries STUN at startup before it accepts a peer code, so
+both machines need to reach the internet even for a LAN-only chat. Only the
+codes you exchange change.
+
 ## Debugging a failed connection
 
 `ramsit` writes logs to `ramsit.log` (the TUI owns the terminal, so logs can't
@@ -52,8 +77,10 @@ other. What the logs tell you when a punch fails:
 - **Symmetric NATs** (many corporate / some cellular networks) assign a
   different port per destination, so hole punching can't work without a relay.
   If it times out, try a different network.
-- **Same LAN won't work** — router hairpinning usually drops the looped-back
-  public endpoints. Use different networks.
+- **Same LAN needs local codes** — router hairpinning drops the looped-back
+  public endpoints, so on a shared network exchange LAN addresses instead (see
+  [Same local network](#same-local-network-lan)). Across different networks the
+  public codes work as usual.
 - **IPv4 only.**
 - Messages are plaintext UDP: no encryption, no delivery guarantee, no history.
 
