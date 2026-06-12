@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 
 /// Reserved leading byte marking a control packet. UTF-8 chat text never
 /// contains a null byte, so user input can never be misclassified.
+#[allow(dead_code)]
 pub const SENTINEL: u8 = 0x00;
 
 pub const PUNCH: &[u8] = b"\x00PUNCH";
@@ -48,9 +49,9 @@ pub fn would_block(e: &std::io::Error) -> bool {
 /// Parse a peer "code" (`IPv4:port`) with a friendly error.
 pub fn parse_code(s: &str) -> Result<SocketAddr> {
     let s = s.trim();
-    let addr: SocketAddr = s
-        .parse()
-        .with_context(|| format!("invalid peer code '{s}' — expected form like 203.0.113.5:54213"))?;
+    let addr: SocketAddr = s.parse().with_context(|| {
+        format!("invalid peer code '{s}' — expected form like 203.0.113.5:54213")
+    })?;
     if !addr.is_ipv4() {
         anyhow::bail!("peer code '{s}' must be IPv4");
     }

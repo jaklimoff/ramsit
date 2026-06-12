@@ -1,6 +1,4 @@
-use crate::proto::{
-    classify, would_block, PacketKind, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF,
-};
+use crate::proto::{classify, would_block, PacketKind, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
 use anyhow::Result;
 use std::io::BufRead;
 use std::net::{SocketAddr, UdpSocket};
