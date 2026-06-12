@@ -1,3 +1,4 @@
+mod app;
 mod chat;
 mod net;
 mod proto;
