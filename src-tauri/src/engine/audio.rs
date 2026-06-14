@@ -108,6 +108,20 @@ impl AudioHandle {
         self.controls.snapshot()
     }
 
+    pub fn set_input_volume(&self, pct: u8) -> AudioState {
+        self.controls
+            .input_vol
+            .store(clamp_vol(pct as i32), Ordering::Relaxed);
+        self.controls.snapshot()
+    }
+
+    pub fn set_output_volume(&self, pct: u8) -> AudioState {
+        self.controls
+            .output_vol
+            .store(clamp_vol(pct as i32), Ordering::Relaxed);
+        self.controls.snapshot()
+    }
+
     pub fn state(&self) -> AudioState {
         self.controls.snapshot()
     }
@@ -358,6 +372,14 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_volume_clamps_into_range() {
+        // set_*_volume stores clamp_vol(pct as i32); verify the clamp contract.
+        assert_eq!(clamp_vol(250), VOL_MAX as u32);
+        assert_eq!(clamp_vol(-5), VOL_MIN as u32);
+        assert_eq!(clamp_vol(80), 80);
+    }
 
     #[test]
     fn clamp_vol_bounds() {
