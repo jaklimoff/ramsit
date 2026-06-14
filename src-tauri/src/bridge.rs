@@ -148,9 +148,13 @@ pub fn run() {
     tauri::Builder::default()
         .setup(move |app| {
             let app_handle = app.handle().clone();
-            let audio = audio_engine::spawn(move |ev: AudioEvent| {
-                let _ = app_handle.emit(EVENT_CHANNEL, audio_event_json(&ev));
-            })
+            let audio = audio_engine::spawn(
+                move |ev: AudioEvent| {
+                    let _ = app_handle.emit(EVENT_CHANNEL, audio_event_json(&ev));
+                },
+                None,
+                None,
+            )
             .expect("failed to start audio engine");
             app.manage(AppState {
                 stun,
