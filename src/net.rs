@@ -292,7 +292,9 @@ mod tests {
         use crate::proto::AUDIO_PREFIX;
         let b = UdpSocket::bind("127.0.0.1:0").unwrap();
         let b_addr = b.local_addr().unwrap();
-        let peer = "127.0.0.1:9".parse().unwrap(); // session B's notion of its peer
+        // The session filters inbound packets by IP only, so the spoof socket's
+        // random port still passes; port 9 (discard) is just a sentinel peer.
+        let peer = "127.0.0.1:9".parse().unwrap();
 
         let (_b_cmd_tx, b_cmd_rx) = channel();
         let (b_evt_tx, b_evt_rx) = channel();
