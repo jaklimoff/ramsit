@@ -17,8 +17,8 @@ pub enum Command {
     PeerCode(SocketAddr),
     Send(String),
     ToggleMute,
-    AdjustInputVolume(i8),
-    AdjustOutputVolume(i8),
+    SetInputVolume(u8),
+    SetOutputVolume(u8),
     Quit,
 }
 
@@ -177,14 +177,14 @@ pub fn session(
                         let _ = events.send(Event::AudioState(a.toggle_mute()));
                     }
                 }
-                Ok(Command::AdjustInputVolume(d)) => {
+                Ok(Command::SetInputVolume(pct)) => {
                     if let Some(a) = &audio {
-                        let _ = events.send(Event::AudioState(a.adjust_input_volume(d)));
+                        let _ = events.send(Event::AudioState(a.set_input_volume(pct)));
                     }
                 }
-                Ok(Command::AdjustOutputVolume(d)) => {
+                Ok(Command::SetOutputVolume(pct)) => {
                     if let Some(a) = &audio {
-                        let _ = events.send(Event::AudioState(a.adjust_output_volume(d)));
+                        let _ = events.send(Event::AudioState(a.set_output_volume(pct)));
                     }
                 }
                 Ok(Command::Quit) => {

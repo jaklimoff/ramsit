@@ -92,22 +92,6 @@ impl AudioHandle {
         self.controls.snapshot()
     }
 
-    pub fn adjust_input_volume(&self, delta: i8) -> AudioState {
-        let cur = self.controls.input_vol.load(Ordering::Relaxed) as i32;
-        self.controls
-            .input_vol
-            .store(clamp_vol(cur + delta as i32), Ordering::Relaxed);
-        self.controls.snapshot()
-    }
-
-    pub fn adjust_output_volume(&self, delta: i8) -> AudioState {
-        let cur = self.controls.output_vol.load(Ordering::Relaxed) as i32;
-        self.controls
-            .output_vol
-            .store(clamp_vol(cur + delta as i32), Ordering::Relaxed);
-        self.controls.snapshot()
-    }
-
     pub fn set_input_volume(&self, pct: u8) -> AudioState {
         self.controls
             .input_vol
