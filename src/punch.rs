@@ -104,7 +104,7 @@ pub fn punch(sock: &UdpSocket, code: SocketAddr) -> Result<(SocketAddr, Vec<Stri
                             early.push(s.to_string());
                         }
                     }
-                    PacketKind::Keepalive | PacketKind::Bye => {}
+                    PacketKind::Keepalive | PacketKind::Bye | PacketKind::Audio => {}
                 }
             }
             Err(e) if would_block(&e) => {} // read timeout, loop and re-send

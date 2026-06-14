@@ -7,6 +7,12 @@ with STUN. No server, no relay, no account.
 
     cargo build --release
 
+Voice links the system Opus library, so install it first:
+
+- macOS: `brew install opus pkg-config`
+- Debian/Ubuntu: `sudo apt install libopus-dev pkg-config`
+- Fedora: `sudo dnf install opus-devel pkgconf-pkg-config`
+
 ## Use
 
 On **both** machines run:
@@ -22,6 +28,24 @@ Ctrl-C) quits.
 
 Pick a different STUN server with `--stun host:port` (default
 `stun.l.google.com:19302`).
+
+## Voice
+
+Once two peers connect, the microphone goes live automatically and voice flows
+both ways over the same P2P UDP link (Opus, 48 kHz mono). It uses your system
+**default** input and output devices.
+
+Controls (in the chat screen):
+
+| Key | Action |
+| --- | --- |
+| `Ctrl-T` | Toggle mute (mic) |
+| `Ctrl-Up` / `Ctrl-Down` | Mic volume +/- 10% |
+| `Alt-Up` / `Alt-Down` | Speaker volume +/- 10% |
+
+Volume ranges 0–200% (digital gain). The status bar shows `[LIVE]`/`[MUTED]` and
+the current mic/speaker levels. If no audio device is available the call still
+works as text chat and shows `[no voice]`.
 
 ## Same local network (LAN)
 
@@ -83,6 +107,8 @@ other. What the logs tell you when a punch fails:
   public codes work as usual.
 - **IPv4 only.**
 - Messages are plaintext UDP: no encryption, no delivery guarantee, no history.
+- **Voice** is plaintext too, uses the system default devices only, and has no
+  packet-loss concealment — lossy links will sound choppy.
 
 ## License
 

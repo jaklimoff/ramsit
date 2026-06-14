@@ -1,4 +1,5 @@
 mod app;
+mod audio;
 mod net;
 mod proto;
 mod punch;
