@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export type DeviceList = {
+  inputs: string[];
+  outputs: string[];
+  currentInput: string | null;
+  currentOutput: string | null;
+};
+
 export type EngineEvent =
   | { type: "discovered"; code: string }
   | { type: "connected"; peer: string }
@@ -25,5 +32,8 @@ export const engine = {
   startAudioTest: () => invoke<void>("start_audio_test"),
   stopAudioTest: () => invoke<void>("stop_audio_test"),
   playTestTone: (on: boolean) => invoke<void>("play_test_tone", { on }),
+  listAudioDevices: () => invoke<DeviceList>("list_audio_devices"),
+  setInputDevice: (name: string | null) => invoke<void>("set_input_device", { name }),
+  setOutputDevice: (name: string | null) => invoke<void>("set_output_device", { name }),
   quit: () => invoke<void>("quit"),
 };
