@@ -74,12 +74,15 @@ impl AudioHandle {
     pub fn play(&self, payload: &[u8]) {
         let mut dec = self.decoder.lock().unwrap();
         let mut out = [0i16; FRAME_SAMPLES];
-        if let Ok(n) = dec.decode(payload, &mut out, false) {
-            let mut jb = self.jitter.lock().unwrap();
-            jb.extend(out[..n].iter().copied());
-            while jb.len() > JITTER_MAX {
-                jb.pop_front();
+        match dec.decode(payload, &mut out, false) {
+            Ok(n) => {
+                let mut jb = self.jitter.lock().unwrap();
+                jb.extend(out[..n].iter().copied());
+                while jb.len() > JITTER_MAX {
+                    jb.pop_front();
+                }
             }
+            Err(e) => log::warn!("audio: decode failed: {e}"),
         }
     }
 
