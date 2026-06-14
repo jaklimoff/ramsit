@@ -41,8 +41,7 @@ pub enum AudioCmd {
 
 /// Shared, `Send + Sync` audio state. Held by the engine thread, the realtime
 /// callbacks (via the Arc fields), the capture pump, and the network worker (`play`).
-#[allow(private_interfaces)] // Controls is intentionally pub(crate); Shared is the crate-internal owner
-pub struct Shared {
+pub(crate) struct Shared {
     pub controls: Arc<Controls>,
     pub meters: Arc<Meters>,
     pub jitter: Arc<Mutex<VecDeque<i16>>>,
@@ -53,7 +52,7 @@ pub struct Shared {
 }
 
 impl Shared {
-    pub fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         Ok(Self {
             controls: Arc::new(Controls {
                 muted: AtomicBool::new(false),
@@ -72,7 +71,7 @@ impl Shared {
 
 /// Per-call encoder: resamples to 48 kHz, frames, applies input gain, encodes Opus,
 /// and hands the bytes to `send`. Protocol-agnostic. Lives in the capture-pump thread.
-pub struct CallSink {
+pub(crate) struct CallSink {
     enc: opus::Encoder,
     resampler: Option<MonoResampler>,
     controls: Arc<Controls>,
@@ -82,8 +81,7 @@ pub struct CallSink {
 }
 
 impl CallSink {
-    #[allow(private_interfaces)] // Controls is intentionally pub(crate)
-    pub fn new(
+    pub(crate) fn new(
         in_rate: u32,
         controls: Arc<Controls>,
         send: Box<dyn FnMut(&[u8]) + Send>,
@@ -105,7 +103,7 @@ impl CallSink {
         })
     }
 
-    pub fn process(&mut self, chunk: &[i16]) {
+    pub(crate) fn process(&mut self, chunk: &[i16]) {
         match self.resampler.as_mut() {
             Some(r) => self.buf.extend_from_slice(&r.process(chunk)),
             None => self.buf.extend_from_slice(chunk),
