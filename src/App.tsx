@@ -14,7 +14,9 @@ export default function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    onEngineEvent((e) => dispatch(e as Action)).then((fn) => {
+    onEngineEvent((e) => {
+      if (e.type !== "levels") dispatch(e as Action);
+    }).then((fn) => {
       unlisten = fn;
       engine.start(); // start AFTER the listener is attached
     });
