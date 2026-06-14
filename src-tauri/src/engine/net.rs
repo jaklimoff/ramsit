@@ -1,4 +1,4 @@
-use crate::audio::{self, AudioHandle};
+use crate::audio_engine::AudioEngineHandle;
 use crate::proto::{
     classify, would_block, PacketKind, AUDIO_PREFIX, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF,
 };
@@ -16,20 +16,16 @@ use stunclient::StunClient;
 pub enum Command {
     PeerCode(SocketAddr),
     Send(String),
-    ToggleMute,
-    SetInputVolume(u8),
-    SetOutputVolume(u8),
     Quit,
 }
 
-/// Messages from the network worker to the UI thread.
+/// Messages from the network worker to the UI thread. Audio state/levels/errors are
+/// emitted by the AudioEngine directly (see bridge), not through this channel.
 #[derive(Debug)]
 pub enum Event {
     Discovered(SocketAddr),
     Connected(SocketAddr),
     Incoming(String),
-    AudioState(crate::audio::AudioState),
-    AudioUnavailable(String),
     PeerLeft,
     Fatal(String),
 }
@@ -71,14 +67,17 @@ pub fn discover(sock: &UdpSocket, stun: SocketAddr) -> Result<SocketAddr> {
 
 /// Spawn the network worker. Returns its join handle plus the channel ends the
 /// UI uses to command it and receive its events.
-pub fn spawn(stun: SocketAddr) -> (JoinHandle<()>, Sender<Command>, Receiver<Event>) {
+pub fn spawn(
+    stun: SocketAddr,
+    audio: AudioEngineHandle,
+) -> (JoinHandle<()>, Sender<Command>, Receiver<Event>) {
     let (cmd_tx, cmd_rx) = channel::<Command>();
     let (evt_tx, evt_rx) = channel::<Event>();
-    let handle = thread::spawn(move || worker(stun, cmd_rx, evt_tx));
+    let handle = thread::spawn(move || worker(stun, audio, cmd_rx, evt_tx));
     (handle, cmd_tx, evt_rx)
 }
 
-fn worker(stun: SocketAddr, cmds: Receiver<Command>, events: Sender<Event>) {
+fn worker(stun: SocketAddr, audio: AudioEngineHandle, cmds: Receiver<Command>, events: Sender<Event>) {
     let sock = match UdpSocket::bind("0.0.0.0:0") {
         Ok(s) => s,
         Err(e) => {
@@ -125,27 +124,14 @@ fn worker(stun: SocketAddr, cmds: Receiver<Command>, events: Sender<Event>) {
         let _ = events.send(Event::Incoming(m));
     }
 
-    // Start voice on the system default devices. Failure is non-fatal: chat
-    // continues. The stream guard must outlive the session, so hold it here.
-    let (_streams, audio) = match sock.try_clone() {
-        Ok(clone) => match audio::start(clone, peer) {
-            Ok((streams, handle)) => {
-                let _ = events.send(Event::AudioState(handle.state()));
-                (Some(streams), Some(handle))
-            }
-            Err(e) => {
-                warn!("audio: unavailable: {e}");
-                let _ = events.send(Event::AudioUnavailable(e.to_string()));
-                (None, None)
-            }
-        },
-        Err(e) => {
-            let _ = events.send(Event::AudioUnavailable(format!("socket clone failed: {e}")));
-            (None, None)
-        }
-    };
+    // Start voice via the engine. The net worker owns the socket; the engine gets a
+    // clone for sending and emits audio state/levels itself.
+    match sock.try_clone() {
+        Ok(clone) => audio.start_call(clone, peer),
+        Err(e) => warn!("audio: socket clone failed, voice disabled: {e}"),
+    }
 
-    session(sock, peer, cmds, events, audio);
+    session(sock, peer, cmds, events, Some(audio));
 }
 
 /// The post-connect bridge loop: forward outgoing `Send`s onto the socket,
@@ -157,7 +143,7 @@ pub fn session(
     peer: SocketAddr,
     cmds: Receiver<Command>,
     events: Sender<Event>,
-    audio: Option<AudioHandle>,
+    audio: Option<AudioEngineHandle>,
 ) {
     let _ = sock.set_read_timeout(Some(POLL));
     let mut buf = [0u8; RECV_BUF];
@@ -172,30 +158,21 @@ pub fn session(
                     debug!("session: -> {peer} chat ({} bytes)", b.len());
                     let _ = sock.send_to(&b, peer);
                 }
-                Ok(Command::ToggleMute) => {
-                    if let Some(a) = &audio {
-                        let _ = events.send(Event::AudioState(a.toggle_mute()));
-                    }
-                }
-                Ok(Command::SetInputVolume(pct)) => {
-                    if let Some(a) = &audio {
-                        let _ = events.send(Event::AudioState(a.set_input_volume(pct)));
-                    }
-                }
-                Ok(Command::SetOutputVolume(pct)) => {
-                    if let Some(a) = &audio {
-                        let _ = events.send(Event::AudioState(a.set_output_volume(pct)));
-                    }
-                }
                 Ok(Command::Quit) => {
                     debug!("session: -> {peer} BYE (local quit)");
                     let _ = sock.send_to(BYE, peer);
+                    if let Some(a) = &audio {
+                        a.end_call();
+                    }
                     return;
                 }
                 Ok(Command::PeerCode(_)) => {} // already connected; ignore
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     let _ = sock.send_to(BYE, peer);
+                    if let Some(a) = &audio {
+                        a.end_call();
+                    }
                     return;
                 }
             }
@@ -223,7 +200,12 @@ pub fn session(
                     }
                     PacketKind::Bye => {
                         let _ = events.send(Event::PeerLeft);
-                        // Keep running so the user can read history and quit cleanly.
+                        // Peer is gone: stop capturing/sending voice (drops the call
+                        // sink). Streams stay open so the Chat-screen meters keep
+                        // running; we keep looping so the user can read history.
+                        if let Some(a) = &audio {
+                            a.end_call();
+                        }
                     }
                     _ => {}
                 }
