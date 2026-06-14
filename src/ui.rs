@@ -29,8 +29,22 @@ pub fn draw(f: &mut Frame, app: &App) {
             input,
             scroll,
             connected,
-            ..
-        } => draw_chat(f, &peer.to_string(), messages, input, *scroll, *connected),
+            muted,
+            input_vol,
+            output_vol,
+            voice,
+        } => draw_chat(
+            f,
+            &peer.to_string(),
+            messages,
+            input,
+            *scroll,
+            *connected,
+            *muted,
+            *input_vol,
+            *output_vol,
+            *voice,
+        ),
         Screen::Fatal { msg } => {
             centered(f, &format!("{msg}\n\n(press q or Esc to quit)"), Color::Red)
         }
@@ -72,6 +86,7 @@ fn draw_exchange(f: &mut Frame, my_code: &str, input: &str, error: Option<&str>)
     f.render_widget(p, f.area());
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_chat(
     f: &mut Frame,
     peer: &str,
@@ -79,6 +94,10 @@ fn draw_chat(
     input: &str,
     scroll: usize,
     connected: bool,
+    muted: bool,
+    input_vol: u8,
+    output_vol: u8,
+    voice: bool,
 ) {
     let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).split(f.area());
     let (history_area, input_area) = (areas[0], areas[1]);
@@ -89,10 +108,24 @@ fn draw_chat(
     } else {
         ("disconnected", Color::Red)
     };
+    let (audio_seg, audio_color) = if !voice {
+        (" [no voice] ".to_string(), Color::DarkGray)
+    } else if muted {
+        (
+            format!(" [MUTED] mic {input_vol}% spk {output_vol}% "),
+            Color::Yellow,
+        )
+    } else {
+        (
+            format!(" [LIVE] mic {input_vol}% spk {output_vol}% "),
+            Color::Cyan,
+        )
+    };
     let title = Line::from(vec![
         Span::raw(format!(" ramsit — peer {peer} ")),
         Span::styled("●", Style::default().fg(color)),
         Span::raw(format!(" {label} ")),
+        Span::styled(audio_seg, Style::default().fg(audio_color)),
     ]);
 
     let inner_h = history_area.height.saturating_sub(2) as usize; // minus borders
@@ -103,8 +136,11 @@ fn draw_chat(
     f.render_widget(history, history_area);
 
     let prompt = format!("> {input}");
-    let input_p = Paragraph::new(prompt.as_str())
-        .block(Block::default().borders(Borders::ALL).title(" message "));
+    let input_p = Paragraph::new(prompt.as_str()).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" message · Ctrl-T mute · Ctrl-Up/Down mic · Alt-Up/Down spk "),
+    );
     f.render_widget(input_p, input_area);
     place_cursor(f, input_area, input.chars().count());
 }
@@ -162,14 +198,17 @@ mod tests {
                 muted: false,
                 input_vol: 100,
                 output_vol: 100,
-                voice: false,
+                voice: true,
             },
             should_quit: false,
         };
-        let s = render(&app, 60, 10);
+        let s = render(&app, 80, 10);
         assert!(s.contains("peer> yo"));
         assert!(s.contains("you> hey"));
         assert!(s.contains("connected"));
         assert!(s.contains("> typing"));
+        assert!(s.contains("LIVE"));
+        assert!(s.contains("mic 100%"));
+        assert!(s.contains("spk 100%"));
     }
 }
