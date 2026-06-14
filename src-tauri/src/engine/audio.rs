@@ -6,6 +6,7 @@ use crate::proto::AUDIO_PREFIX;
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
+use rubato::{FftFixedIn, Resampler};
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -13,8 +14,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// Opus-supported sample rate we run at; both CoreAudio and PipeWire provide it
-/// on request, so we never resample.
+/// Opus-supported sample rate the codec and wire protocol run at. Devices that
+/// don't offer 48 kHz are driven at their native rate and resampled to/from this
+/// at the capture/playback boundary (see `MonoResampler`).
 pub const SAMPLE_RATE: u32 = 48_000;
 /// Samples per 20 ms mono frame at `SAMPLE_RATE`.
 pub const FRAME_SAMPLES: usize = 960;
@@ -67,6 +69,9 @@ pub struct AudioHandle {
     controls: Arc<Controls>,
     jitter: Arc<Mutex<VecDeque<i16>>>,
     decoder: Arc<Mutex<opus::Decoder>>,
+    /// Resamples decoded 48 kHz audio to the output device rate; `None` when the
+    /// device already runs at `SAMPLE_RATE`.
+    out_resampler: Option<Arc<Mutex<MonoResampler>>>,
 }
 
 impl AudioHandle {
@@ -76,8 +81,12 @@ impl AudioHandle {
         let mut out = [0i16; FRAME_SAMPLES];
         match dec.decode(payload, &mut out, false) {
             Ok(n) => {
+                let samples = match &self.out_resampler {
+                    Some(r) => r.lock().unwrap().process(&out[..n]),
+                    None => out[..n].to_vec(),
+                };
                 let mut jb = self.jitter.lock().unwrap();
-                jb.extend(out[..n].iter().copied());
+                jb.extend(samples);
                 while jb.len() > JITTER_MAX {
                     jb.pop_front();
                 }
@@ -142,11 +151,65 @@ pub fn downmix(interleaved: &[i16], channels: usize) -> Vec<i16> {
         .collect()
 }
 
+/// Streaming mono i16 resampler between two sample rates, used at the device
+/// boundary so the Opus pipeline always runs at `SAMPLE_RATE`. Buffers input so
+/// callers may push arbitrary-length chunks; runs off the realtime audio thread.
+pub struct MonoResampler {
+    inner: FftFixedIn<f32>,
+    chunk_in: usize,
+    pending: Vec<f32>,
+}
+
+impl MonoResampler {
+    /// Build a resampler from `from_hz` to `to_hz`. The input chunk is ~20 ms so
+    /// the FFT sizes align to the rate gcd and latency stays low.
+    pub fn new(from_hz: u32, to_hz: u32) -> Result<Self> {
+        let chunk_in = (from_hz as usize / 50).max(1);
+        let inner = FftFixedIn::<f32>::new(from_hz as usize, to_hz as usize, chunk_in, 1, 1)
+            .map_err(|e| anyhow!("resampler init {from_hz}->{to_hz}: {e}"))?;
+        let chunk_in = inner.input_frames_next();
+        Ok(Self {
+            inner,
+            chunk_in,
+            pending: Vec::new(),
+        })
+    }
+
+    /// Resample `input`, returning whatever full output frames are ready. Samples
+    /// that don't fill a chunk are retained for the next call.
+    pub fn process(&mut self, input: &[i16]) -> Vec<i16> {
+        self.pending
+            .extend(input.iter().map(|&s| s as f32 / 32768.0));
+        let mut out = Vec::new();
+        while self.pending.len() >= self.chunk_in {
+            let chunk: Vec<f32> = self.pending.drain(..self.chunk_in).collect();
+            match self.inner.process(&[chunk], None) {
+                Ok(res) => out.extend(res[0].iter().map(|&s| {
+                    (s * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+                })),
+                Err(e) => log::warn!("audio: resample failed: {e}"),
+            }
+        }
+        out
+    }
+}
+
+/// True if the device advertises a config range covering `SAMPLE_RATE`, so we can
+/// run it at 48 kHz and skip resampling entirely.
+fn prefers_48k<I: Iterator<Item = cpal::SupportedStreamConfigRange>>(supported: Option<I>) -> bool {
+    supported
+        .map(|mut c| {
+            c.any(|r| r.min_sample_rate() <= SAMPLE_RATE && r.max_sample_rate() >= SAMPLE_RATE)
+        })
+        .unwrap_or(false)
+}
+
 fn encoder_loop(
     sock: UdpSocket,
     peer: SocketAddr,
     controls: Arc<Controls>,
     pcm_rx: Receiver<Vec<i16>>,
+    in_rate: u32,
 ) {
     let mut enc =
         match opus::Encoder::new(SAMPLE_RATE, opus::Channels::Mono, opus::Application::Voip) {
@@ -156,12 +219,26 @@ fn encoder_loop(
                 return;
             }
         };
+    let mut resampler = if in_rate != SAMPLE_RATE {
+        match MonoResampler::new(in_rate, SAMPLE_RATE) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                log::warn!("audio: input resampler init failed: {e}");
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let mut buf: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 4);
     let mut out = [0u8; 4000];
     let mut pkt = Vec::with_capacity(AUDIO_PREFIX.len() + 400);
 
     while let Ok(chunk) = pcm_rx.recv() {
-        buf.extend_from_slice(&chunk);
+        match resampler.as_mut() {
+            Some(r) => buf.extend_from_slice(&r.process(&chunk)),
+            None => buf.extend_from_slice(&chunk),
+        }
         while buf.len() >= FRAME_SAMPLES {
             let mut frame: Vec<i16> = buf.drain(..FRAME_SAMPLES).collect();
             if controls.muted.load(Ordering::Relaxed) {
@@ -294,27 +371,38 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
     });
     let jitter = Arc::new(Mutex::new(VecDeque::<i16>::new()));
 
-    // Capture → encoder thread → socket.
+    // Capture → encoder thread → socket. Prefer 48 kHz (no resampling); otherwise
+    // fall back to the device's native rate and resample to SAMPLE_RATE.
     let in_cfg = in_dev.default_input_config()?;
+    let in_rate = if prefers_48k(in_dev.supported_input_configs().ok()) {
+        SAMPLE_RATE
+    } else {
+        in_cfg.sample_rate()
+    };
     let in_channels = in_cfg.channels().max(1) as usize;
     let in_sc = StreamConfig {
         channels: in_cfg.channels(),
-        sample_rate: SAMPLE_RATE,
+        sample_rate: in_rate,
         buffer_size: BufferSize::Default,
     };
     let (pcm_tx, pcm_rx) = channel::<Vec<i16>>();
     let input = build_input(&in_dev, in_sc, in_channels, in_cfg.sample_format(), pcm_tx)?;
     {
         let controls = controls.clone();
-        thread::spawn(move || encoder_loop(sock, peer, controls, pcm_rx));
+        thread::spawn(move || encoder_loop(sock, peer, controls, pcm_rx, in_rate));
     }
 
     // Playback ← jitter buffer ← decoder (via AudioHandle::play).
     let out_cfg = out_dev.default_output_config()?;
+    let out_rate = if prefers_48k(out_dev.supported_output_configs().ok()) {
+        SAMPLE_RATE
+    } else {
+        out_cfg.sample_rate()
+    };
     let out_channels = out_cfg.channels().max(1) as usize;
     let out_sc = StreamConfig {
         channels: out_cfg.channels(),
-        sample_rate: SAMPLE_RATE,
+        sample_rate: out_rate,
         buffer_size: BufferSize::Default,
     };
     let output = build_output(
@@ -329,7 +417,7 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
     input.play()?;
     output.play()?;
     log::info!(
-        "audio: started — in {}ch/{:?}, out {}ch/{:?}, peer {peer}",
+        "audio: started — in {}ch/{:?}@{in_rate}Hz, out {}ch/{:?}@{out_rate}Hz, peer {peer}",
         in_channels,
         in_cfg.sample_format(),
         out_channels,
@@ -340,6 +428,11 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
         SAMPLE_RATE,
         opus::Channels::Mono,
     )?));
+    let out_resampler = if out_rate != SAMPLE_RATE {
+        Some(Arc::new(Mutex::new(MonoResampler::new(SAMPLE_RATE, out_rate)?)))
+    } else {
+        None
+    };
     Ok((
         AudioStreams {
             _input: input,
@@ -349,6 +442,7 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
             controls,
             jitter,
             decoder,
+            out_resampler,
         },
     ))
 }
@@ -392,6 +486,37 @@ mod tests {
     fn downmix_averages_and_passes_mono() {
         assert_eq!(downmix(&[10, 30, -10, 10], 2), vec![20, 0]);
         assert_eq!(downmix(&[5, 7], 1), vec![5, 7]);
+    }
+
+    #[test]
+    fn resampler_scales_sample_count_by_ratio() {
+        // 48k -> 24k halves the stream; feed 10 full input chunks (~200 ms).
+        let mut r = MonoResampler::new(48_000, 24_000).unwrap();
+        let input = vec![0i16; r.chunk_in * 10];
+        let out = r.process(&input);
+        assert_eq!(out.len(), input.len() / 2);
+    }
+
+    #[test]
+    fn resampler_buffers_partial_chunks() {
+        // Fewer samples than one chunk produce no output yet; the rest is retained.
+        let mut r = MonoResampler::new(44_100, 48_000).unwrap();
+        assert!(r.process(&[0i16; 10]).is_empty());
+        assert_eq!(r.pending.len(), 10);
+    }
+
+    #[test]
+    fn resampler_preserves_dc_after_warmup() {
+        // A constant signal must stay constant through resampling once the FFT
+        // overlap buffers have primed (skip the leading transient).
+        let mut r = MonoResampler::new(44_100, 48_000).unwrap();
+        let input = vec![10_000i16; r.chunk_in * 8];
+        let out = r.process(&input);
+        assert!(!out.is_empty());
+        let tail = &out[out.len() / 2..];
+        for &s in tail {
+            assert!((s as i32 - 10_000).abs() < 500, "sample {s} drifted from DC");
+        }
     }
 
     #[test]
