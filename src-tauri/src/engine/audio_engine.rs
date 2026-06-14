@@ -535,18 +535,22 @@ fn engine_loop(
                 call = None;
             }
             AudioCmd::SetInputDevice(name) => {
-                in_dev = name;
-                reopen(
-                    &shared, &sink_slot, &mut streams, &mut in_rate, &in_dev, &out_dev, &call,
-                    &on_event,
-                );
+                if name != in_dev {
+                    in_dev = name;
+                    reopen(
+                        &shared, &sink_slot, &mut streams, &mut in_rate, &in_dev, &out_dev, &call,
+                        &on_event,
+                    );
+                }
             }
             AudioCmd::SetOutputDevice(name) => {
-                out_dev = name;
-                reopen(
-                    &shared, &sink_slot, &mut streams, &mut in_rate, &in_dev, &out_dev, &call,
-                    &on_event,
-                );
+                if name != out_dev {
+                    out_dev = name;
+                    reopen(
+                        &shared, &sink_slot, &mut streams, &mut in_rate, &in_dev, &out_dev, &call,
+                        &on_event,
+                    );
+                }
             }
             AudioCmd::ListDevices(reply) => {
                 let _ = reply.send(enumerate_devices(&in_dev, &out_dev));
