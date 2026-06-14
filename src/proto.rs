@@ -9,6 +9,9 @@ pub const PUNCH: &[u8] = b"\x00PUNCH";
 pub const PUNCH_ACK: &[u8] = b"\x00PUNCH-ACK";
 pub const KEEPALIVE: &[u8] = b"\x00KEEPALIVE";
 pub const BYE: &[u8] = b"\x00BYE";
+/// Prefix marking a voice frame: `\x00AUD` + Opus payload. Distinguishes binary
+/// Opus data (which may contain `0x00`) from raw-UTF-8 chat.
+pub const AUDIO_PREFIX: &[u8] = b"\x00AUD";
 
 /// Largest datagram we read; also bounds chat line length upstream.
 pub const RECV_BUF: usize = 1500;
@@ -21,6 +24,7 @@ pub enum PacketKind {
     PunchAck,
     Keepalive,
     Bye,
+    Audio,
     Chat,
 }
 
@@ -30,6 +34,9 @@ pub fn classify(buf: &[u8]) -> PacketKind {
     // Chat text never starts with the sentinel, so short-circuit it.
     if buf.first() != Some(&SENTINEL) {
         return PacketKind::Chat;
+    }
+    if buf.starts_with(AUDIO_PREFIX) {
+        return PacketKind::Audio;
     }
     match buf {
         PUNCH => PacketKind::Punch,
@@ -91,5 +98,22 @@ mod tests {
     fn rejects_garbage_and_ipv6() {
         assert!(parse_code("not-an-addr").is_err());
         assert!(parse_code("[::1]:80").is_err());
+    }
+
+    #[test]
+    fn classifies_audio_prefix() {
+        // Opus payloads can contain sentinel/null bytes; the prefix still wins.
+        let mut pkt = AUDIO_PREFIX.to_vec();
+        pkt.extend_from_slice(&[0x00, 0x12, 0xff, 0x00]);
+        assert_eq!(classify(&pkt), PacketKind::Audio);
+    }
+
+    #[test]
+    fn audio_prefix_does_not_disturb_chat_or_control() {
+        assert_eq!(classify(b"hello bro"), PacketKind::Chat);
+        assert_eq!(classify(PUNCH), PacketKind::Punch);
+        assert_eq!(classify(BYE), PacketKind::Bye);
+        // Bare sentinel that is not the audio prefix and not a known control.
+        assert_eq!(classify(b"\x00AU"), PacketKind::Chat);
     }
 }
