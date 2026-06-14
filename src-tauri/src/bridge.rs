@@ -1,3 +1,5 @@
+use crate::audio::AudioState;
+use crate::audio_engine::{self, AudioEngineHandle, AudioEvent};
 use crate::net::{self, Command, Event};
 use crate::proto::parse_code;
 use serde_json::{json, Value};
@@ -15,6 +17,7 @@ const EVENT_CHANNEL: &str = "engine-event";
 struct AppState {
     stun: SocketAddr,
     cmd_tx: Mutex<Option<Sender<Command>>>,
+    audio: AudioEngineHandle,
 }
 
 /// Map an engine `Event` to the tagged JSON the frontend listens for.
@@ -23,15 +26,27 @@ fn event_to_json(ev: &Event) -> Value {
         Event::Discovered(addr) => json!({ "type": "discovered", "code": addr.to_string() }),
         Event::Connected(addr) => json!({ "type": "connected", "peer": addr.to_string() }),
         Event::Incoming(s) => json!({ "type": "incoming", "text": s }),
-        Event::AudioState(st) => json!({
-            "type": "audioState",
-            "muted": st.muted,
-            "inputVol": st.input_vol,
-            "outputVol": st.output_vol,
-        }),
-        Event::AudioUnavailable(s) => json!({ "type": "audioUnavailable", "reason": s }),
         Event::PeerLeft => json!({ "type": "peerLeft" }),
         Event::Fatal(s) => json!({ "type": "fatal", "message": s }),
+    }
+}
+
+fn audio_state_json(st: &AudioState) -> Value {
+    json!({
+        "type": "audioState",
+        "muted": st.muted,
+        "inputVol": st.input_vol,
+        "outputVol": st.output_vol,
+    })
+}
+
+fn audio_event_json(ev: &AudioEvent) -> Value {
+    match ev {
+        AudioEvent::Levels { input, output } => {
+            json!({ "type": "levels", "input": input, "output": output })
+        }
+        AudioEvent::State(st) => audio_state_json(st),
+        AudioEvent::Unavailable(reason) => json!({ "type": "audioUnavailable", "reason": reason }),
     }
 }
 
@@ -42,7 +57,7 @@ fn start(app: AppHandle, state: State<AppState>) {
     if guard.is_some() {
         return; // already started
     }
-    let (_handle, cmd_tx, evt_rx) = net::spawn(state.stun);
+    let (_handle, cmd_tx, evt_rx) = net::spawn(state.stun, state.audio.clone());
     *guard = Some(cmd_tx);
     std::thread::spawn(move || {
         while let Ok(ev) = evt_rx.recv() {
@@ -73,18 +88,36 @@ fn send_message(text: String, state: State<AppState>) {
 }
 
 #[tauri::command]
-fn toggle_mute(state: State<AppState>) {
-    send(&state, Command::ToggleMute);
+fn toggle_mute(app: AppHandle, state: State<AppState>) {
+    let st = state.audio.toggle_mute();
+    let _ = app.emit(EVENT_CHANNEL, audio_state_json(&st));
 }
 
 #[tauri::command]
-fn set_input_volume(pct: u8, state: State<AppState>) {
-    send(&state, Command::SetInputVolume(pct));
+fn set_input_volume(app: AppHandle, pct: u8, state: State<AppState>) {
+    let st = state.audio.set_input_volume(pct);
+    let _ = app.emit(EVENT_CHANNEL, audio_state_json(&st));
 }
 
 #[tauri::command]
-fn set_output_volume(pct: u8, state: State<AppState>) {
-    send(&state, Command::SetOutputVolume(pct));
+fn set_output_volume(app: AppHandle, pct: u8, state: State<AppState>) {
+    let st = state.audio.set_output_volume(pct);
+    let _ = app.emit(EVENT_CHANNEL, audio_state_json(&st));
+}
+
+#[tauri::command]
+fn start_audio_test(state: State<AppState>) {
+    state.audio.start_test();
+}
+
+#[tauri::command]
+fn stop_audio_test(state: State<AppState>) {
+    state.audio.stop_test();
+}
+
+#[tauri::command]
+fn play_test_tone(on: bool, state: State<AppState>) {
+    state.audio.set_tone(on);
 }
 
 #[tauri::command]
@@ -113,9 +146,18 @@ pub fn run() {
     log::info!("stun: using server {DEFAULT_STUN} ({stun})");
 
     tauri::Builder::default()
-        .manage(AppState {
-            stun,
-            cmd_tx: Mutex::new(None),
+        .setup(move |app| {
+            let app_handle = app.handle().clone();
+            let audio = audio_engine::spawn(move |ev: AudioEvent| {
+                let _ = app_handle.emit(EVENT_CHANNEL, audio_event_json(&ev));
+            })
+            .expect("failed to start audio engine");
+            app.manage(AppState {
+                stun,
+                cmd_tx: Mutex::new(None),
+                audio,
+            });
+            Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
@@ -123,6 +165,7 @@ pub fn run() {
                     if let Some(tx) = state.cmd_tx.lock().unwrap().as_ref() {
                         let _ = tx.send(Command::Quit);
                     }
+                    state.audio.shutdown();
                 }
                 // Best-effort: give the worker up to 300ms to transmit a BYE.
                 // Not guaranteed under load or high-latency links (same trade-off
@@ -137,6 +180,9 @@ pub fn run() {
             toggle_mute,
             set_input_volume,
             set_output_volume,
+            start_audio_test,
+            stop_audio_test,
+            play_test_tone,
             quit,
         ])
         .run(tauri::generate_context!())
@@ -145,17 +191,17 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::event_to_json;
+    use super::{audio_state_json, event_to_json};
     use crate::audio::AudioState;
     use crate::net::Event;
 
     #[test]
     fn maps_audio_state_with_camel_case_keys() {
-        let v = event_to_json(&Event::AudioState(AudioState {
+        let v = audio_state_json(&AudioState {
             muted: true,
             input_vol: 80,
             output_vol: 120,
-        }));
+        });
         assert_eq!(v["type"], "audioState");
         assert_eq!(v["muted"], true);
         assert_eq!(v["inputVol"], 80);
