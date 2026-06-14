@@ -459,6 +459,12 @@ fn reopen(
     }
     // Tear down: clearing the sink stops sends; dropping streams drops pcm_tx so the
     // pump thread exits; clear jitter since the output rate may change.
+    //
+    // INVARIANT: the sink MUST be cleared before reopening. The old pump thread is not
+    // joined, so it can briefly coexist with the new pump (spawned in open_streams) and
+    // both share this `sink_slot`. Keeping the sink `None` until after ensure_open means
+    // the draining old pump can only ever observe `None` — never the new sink. Do not
+    // repopulate the sink before ensure_open returns.
     *sink_slot.lock().unwrap() = None;
     shared.active.store(false, Ordering::Relaxed);
     *streams = None;
