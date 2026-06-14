@@ -21,6 +21,10 @@ pub enum Screen {
         input: String,
         scroll: usize, // lines from the bottom; 0 = pinned
         connected: bool,
+        muted: bool,
+        input_vol: u8,
+        output_vol: u8,
+        voice: bool, // whether the audio engine started
     },
     Fatal {
         msg: String,
@@ -65,6 +69,10 @@ impl App {
                     input: String::new(),
                     scroll: 0,
                     connected: true,
+                    muted: false,
+                    input_vol: 100,
+                    output_vol: 100,
+                    voice: false,
                 };
             }
             Event::Incoming(s) => {
@@ -94,8 +102,30 @@ impl App {
             Event::Fatal(msg) => {
                 self.screen = Screen::Fatal { msg };
             }
-            // Audio events are handled by later UI tasks; ignore for now.
-            Event::AudioState(_) | Event::AudioUnavailable(_) => {}
+            Event::AudioState(st) => {
+                if let Screen::Chat {
+                    muted,
+                    input_vol,
+                    output_vol,
+                    voice,
+                    ..
+                } = &mut self.screen
+                {
+                    *muted = st.muted;
+                    *input_vol = st.input_vol;
+                    *output_vol = st.output_vol;
+                    *voice = true;
+                }
+            }
+            Event::AudioUnavailable(msg) => {
+                if let Screen::Chat {
+                    messages, voice, ..
+                } = &mut self.screen
+                {
+                    *voice = false;
+                    messages.push(format!("* voice unavailable: {msg} *"));
+                }
+            }
         }
     }
 
@@ -146,28 +176,37 @@ impl App {
                 input,
                 scroll,
                 ..
-            } => match key.code {
-                KeyCode::Char(c) => input.push(c),
-                KeyCode::Backspace => {
-                    input.pop();
-                }
-                KeyCode::Enter => {
-                    if !input.is_empty() {
-                        let line = std::mem::take(input);
-                        messages.push(format!("you> {line}"));
-                        *scroll = 0;
-                        cmd = Some(Command::Send(line));
+            } => {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                let alt = key.modifiers.contains(KeyModifiers::ALT);
+                match key.code {
+                    KeyCode::Char('t') if ctrl => cmd = Some(Command::ToggleMute),
+                    KeyCode::Up if ctrl => cmd = Some(Command::AdjustInputVolume(10)),
+                    KeyCode::Down if ctrl => cmd = Some(Command::AdjustInputVolume(-10)),
+                    KeyCode::Up if alt => cmd = Some(Command::AdjustOutputVolume(10)),
+                    KeyCode::Down if alt => cmd = Some(Command::AdjustOutputVolume(-10)),
+                    KeyCode::Char(c) => input.push(c),
+                    KeyCode::Backspace => {
+                        input.pop();
                     }
+                    KeyCode::Enter => {
+                        if !input.is_empty() {
+                            let line = std::mem::take(input);
+                            messages.push(format!("you> {line}"));
+                            *scroll = 0;
+                            cmd = Some(Command::Send(line));
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        let max = messages.len().saturating_sub(1);
+                        *scroll = (*scroll + PAGE).min(max);
+                    }
+                    KeyCode::PageDown => {
+                        *scroll = scroll.saturating_sub(PAGE);
+                    }
+                    _ => {}
                 }
-                KeyCode::PageUp => {
-                    let max = messages.len().saturating_sub(1);
-                    *scroll = (*scroll + PAGE).min(max);
-                }
-                KeyCode::PageDown => {
-                    *scroll = scroll.saturating_sub(PAGE);
-                }
-                _ => {}
-            },
+            }
             Screen::Fatal { .. } => {
                 if key.code == KeyCode::Char('q') {
                     quit = true;
@@ -194,6 +233,13 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+    fn alt(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::ALT)
+    }
+
     fn addr() -> std::net::SocketAddr {
         "203.0.113.5:54213".parse().unwrap()
     }
@@ -206,6 +252,10 @@ mod tests {
                 input: String::new(),
                 scroll: 0,
                 connected: true,
+                muted: false,
+                input_vol: 100,
+                output_vol: 100,
+                voice: true,
             },
             should_quit: false,
         }
@@ -292,5 +342,74 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::Fatal("boom".into()));
         assert!(matches!(app.screen, Screen::Fatal { .. }));
+    }
+
+    #[test]
+    fn audio_state_event_updates_mirror() {
+        let mut app = chat_app();
+        app.apply(Event::AudioState(crate::audio::AudioState {
+            muted: true,
+            input_vol: 80,
+            output_vol: 120,
+        }));
+        if let Screen::Chat {
+            muted,
+            input_vol,
+            output_vol,
+            voice,
+            ..
+        } = &app.screen
+        {
+            assert!(*muted && *voice);
+            assert_eq!((*input_vol, *output_vol), (80, 120));
+        } else {
+            panic!("expected Chat");
+        }
+    }
+
+    #[test]
+    fn audio_unavailable_clears_voice_and_notes_it() {
+        let mut app = chat_app();
+        app.apply(Event::AudioUnavailable("no mic".into()));
+        if let Screen::Chat {
+            voice, messages, ..
+        } = &app.screen
+        {
+            assert!(!*voice);
+            assert!(messages.iter().any(|m| m.contains("voice unavailable")));
+        } else {
+            panic!("expected Chat");
+        }
+    }
+
+    #[test]
+    fn ctrl_t_toggles_mute_without_typing() {
+        let mut app = chat_app();
+        let cmd = app.on_key(ctrl(KeyCode::Char('t')));
+        assert!(matches!(cmd, Some(Command::ToggleMute)));
+        if let Screen::Chat { input, .. } = &app.screen {
+            assert!(input.is_empty(), "Ctrl-T must not insert 't'");
+        }
+    }
+
+    #[test]
+    fn volume_keys_emit_adjust_commands() {
+        let mut app = chat_app();
+        assert!(matches!(
+            app.on_key(ctrl(KeyCode::Up)),
+            Some(Command::AdjustInputVolume(10))
+        ));
+        assert!(matches!(
+            app.on_key(ctrl(KeyCode::Down)),
+            Some(Command::AdjustInputVolume(-10))
+        ));
+        assert!(matches!(
+            app.on_key(alt(KeyCode::Up)),
+            Some(Command::AdjustOutputVolume(10))
+        ));
+        assert!(matches!(
+            app.on_key(alt(KeyCode::Down)),
+            Some(Command::AdjustOutputVolume(-10))
+        ));
     }
 }

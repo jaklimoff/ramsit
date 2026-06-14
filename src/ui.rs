@@ -29,6 +29,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             input,
             scroll,
             connected,
+            ..
         } => draw_chat(f, &peer.to_string(), messages, input, *scroll, *connected),
         Screen::Fatal { msg } => {
             centered(f, &format!("{msg}\n\n(press q or Esc to quit)"), Color::Red)
@@ -158,6 +159,10 @@ mod tests {
                 input: "typing".into(),
                 scroll: 0,
                 connected: true,
+                muted: false,
+                input_vol: 100,
+                output_vol: 100,
+                voice: false,
             },
             should_quit: false,
         };
