@@ -2,7 +2,9 @@
 //! and reads back an `AudioState` snapshot, so a future Tauri front-end reuses it
 //! unchanged.
 
+use crate::meter::{frame_peak, Meters};
 use crate::proto::AUDIO_PREFIX;
+use crate::tone::ToneGen;
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
@@ -58,8 +60,8 @@ impl Controls {
 /// Keeps the cpal streams alive. `!Send` (cpal streams are not Send), so it stays
 /// on the thread that built it and is dropped when the call ends.
 pub struct AudioStreams {
-    _input: cpal::Stream,
-    _output: cpal::Stream,
+    pub(crate) _input: cpal::Stream,
+    pub(crate) _output: cpal::Stream,
 }
 
 /// Send + Sync control/data handle the network session uses: feed received Opus
@@ -196,7 +198,9 @@ impl MonoResampler {
 
 /// True if the device advertises a config range covering `SAMPLE_RATE`, so we can
 /// run it at 48 kHz and skip resampling entirely.
-fn prefers_48k<I: Iterator<Item = cpal::SupportedStreamConfigRange>>(supported: Option<I>) -> bool {
+pub(crate) fn prefers_48k<I: Iterator<Item = cpal::SupportedStreamConfigRange>>(
+    supported: Option<I>,
+) -> bool {
     supported
         .map(|mut c| {
             c.any(|r| r.min_sample_rate() <= SAMPLE_RATE && r.max_sample_rate() >= SAMPLE_RATE)
@@ -258,16 +262,17 @@ fn encoder_loop(
     }
 }
 
-fn build_input(
+pub(crate) fn build_input(
     dev: &cpal::Device,
     cfg: StreamConfig,
     channels: usize,
     fmt: SampleFormat,
+    meters: Arc<Meters>,
     pcm_tx: Sender<Vec<i16>>,
 ) -> Result<cpal::Stream> {
     match fmt {
-        SampleFormat::F32 => input_stream::<f32>(dev, cfg, channels, pcm_tx),
-        SampleFormat::I16 => input_stream::<i16>(dev, cfg, channels, pcm_tx),
+        SampleFormat::F32 => input_stream::<f32>(dev, cfg, channels, meters, pcm_tx),
+        SampleFormat::I16 => input_stream::<i16>(dev, cfg, channels, meters, pcm_tx),
         other => Err(anyhow!("unsupported input sample format {other:?}")),
     }
 }
@@ -276,6 +281,7 @@ fn input_stream<T>(
     dev: &cpal::Device,
     cfg: StreamConfig,
     channels: usize,
+    meters: Arc<Meters>,
     pcm_tx: Sender<Vec<i16>>,
 ) -> Result<cpal::Stream>
 where
@@ -286,7 +292,9 @@ where
         cfg,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
             let pcm: Vec<i16> = data.iter().map(|&s| i16::from_sample(s)).collect();
-            let _ = pcm_tx.send(downmix(&pcm, channels));
+            let mono = downmix(&pcm, channels);
+            meters.record_input(frame_peak(&mono));
+            let _ = pcm_tx.send(mono);
         },
         |e| log::warn!("audio: input stream error: {e}"),
         None,
@@ -294,42 +302,59 @@ where
     Ok(stream)
 }
 
-fn build_output(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_output(
     dev: &cpal::Device,
     cfg: StreamConfig,
     channels: usize,
     fmt: SampleFormat,
+    rate: u32,
     jitter: Arc<Mutex<VecDeque<i16>>>,
     controls: Arc<Controls>,
+    meters: Arc<Meters>,
+    tone_active: Arc<AtomicBool>,
 ) -> Result<cpal::Stream> {
     match fmt {
-        SampleFormat::F32 => output_stream::<f32>(dev, cfg, channels, jitter, controls),
-        SampleFormat::I16 => output_stream::<i16>(dev, cfg, channels, jitter, controls),
+        SampleFormat::F32 => {
+            output_stream::<f32>(dev, cfg, channels, rate, jitter, controls, meters, tone_active)
+        }
+        SampleFormat::I16 => {
+            output_stream::<i16>(dev, cfg, channels, rate, jitter, controls, meters, tone_active)
+        }
         other => Err(anyhow!("unsupported output sample format {other:?}")),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn output_stream<T>(
     dev: &cpal::Device,
     cfg: StreamConfig,
     channels: usize,
+    rate: u32,
     jitter: Arc<Mutex<VecDeque<i16>>>,
     controls: Arc<Controls>,
+    meters: Arc<Meters>,
+    tone_active: Arc<AtomicBool>,
 ) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<i16>,
 {
     let mut playing = false; // owned by this FnMut; latches once primed
+    let mut tone = ToneGen::new(440.0, rate);
     let stream = dev.build_output_stream(
         cfg,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let gain = controls.output_vol.load(Ordering::Relaxed);
+            let toning = tone_active.load(Ordering::Relaxed);
             let mut jb = jitter.lock().unwrap();
             if !playing && jb.len() >= JITTER_PRIME {
                 playing = true;
             }
+            let mut peak = 0u32;
             for frame in data.chunks_mut(channels) {
-                let sample = if playing {
+                let sample = if toning {
+                    gain_sample(tone.next_sample(), gain)
+                } else if playing {
                     match jb.pop_front() {
                         Some(s) => gain_sample(s, gain),
                         None => {
@@ -340,11 +365,13 @@ where
                 } else {
                     0
                 };
+                peak = peak.max((sample as i32).unsigned_abs());
                 let out = T::from_sample(sample);
                 for o in frame.iter_mut() {
                     *o = out;
                 }
             }
+            meters.record_output(peak);
         },
         |e| log::warn!("audio: output stream error: {e}"),
         None,
@@ -370,6 +397,8 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
         output_vol: AtomicU32::new(100),
     });
     let jitter = Arc::new(Mutex::new(VecDeque::<i16>::new()));
+    let meters = Arc::new(Meters::default());
+    let tone_active = Arc::new(AtomicBool::new(false));
 
     // Capture → encoder thread → socket. Prefer 48 kHz (no resampling); otherwise
     // fall back to the device's native rate and resample to SAMPLE_RATE.
@@ -386,7 +415,14 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
         buffer_size: BufferSize::Default,
     };
     let (pcm_tx, pcm_rx) = channel::<Vec<i16>>();
-    let input = build_input(&in_dev, in_sc, in_channels, in_cfg.sample_format(), pcm_tx)?;
+    let input = build_input(
+        &in_dev,
+        in_sc,
+        in_channels,
+        in_cfg.sample_format(),
+        meters.clone(),
+        pcm_tx,
+    )?;
     {
         let controls = controls.clone();
         thread::spawn(move || encoder_loop(sock, peer, controls, pcm_rx, in_rate));
@@ -410,8 +446,11 @@ pub fn start(sock: UdpSocket, peer: SocketAddr) -> Result<(AudioStreams, AudioHa
         out_sc,
         out_channels,
         out_cfg.sample_format(),
+        out_rate,
         jitter.clone(),
         controls.clone(),
+        meters.clone(),
+        tone_active.clone(),
     )?;
 
     input.play()?;
