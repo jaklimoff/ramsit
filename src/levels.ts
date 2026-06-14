@@ -30,9 +30,11 @@ export function __setForTest(i: number, o: number): void {
   emit();
 }
 
-// Subscribe once at module load. The reducer ignores `levels`, so this is the only
-// consumer — keeping 30 Hz updates off the React reducer path. Guarded so importing
-// this module in a non-Tauri environment (e.g. vitest) does not throw.
+// Subscribe once at module load. The backend multiplexes every event onto the single
+// `engine-event` channel (same channel `onEngineEvent` uses) with a `type`
+// discriminator, so we listen there and keep only `type === "levels"`. The reducer
+// ignores `levels`, so this is the only consumer — keeping 30 Hz updates off the React
+// reducer path. Guarded so importing this module under vitest (no `window`) won't throw.
 try {
   void listen<{ type: string; input: number; output: number }>(
     "engine-event",
