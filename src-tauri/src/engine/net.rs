@@ -200,7 +200,12 @@ pub fn session(
                     }
                     PacketKind::Bye => {
                         let _ = events.send(Event::PeerLeft);
-                        // Keep running so the user can read history and quit cleanly.
+                        // Peer is gone: stop capturing/sending voice (drops the call
+                        // sink). Streams stay open so the Chat-screen meters keep
+                        // running; we keep looping so the user can read history.
+                        if let Some(a) = &audio {
+                            a.end_call();
+                        }
                     }
                     _ => {}
                 }
