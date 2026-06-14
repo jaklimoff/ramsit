@@ -1,5 +1,7 @@
 use crate::audio::{self, AudioHandle};
-use crate::proto::{classify, would_block, PacketKind, AUDIO_PREFIX, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
+use crate::proto::{
+    classify, would_block, PacketKind, AUDIO_PREFIX, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF,
+};
 use crate::punch;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -306,7 +308,7 @@ mod tests {
         spoof.send_to(&pkt, b_addr).unwrap();
 
         match b_evt_rx.recv_timeout(Duration::from_millis(400)) {
-            Err(_) => {}                                          // good: dropped
+            Err(_) => {} // good: dropped
             Ok(Event::Incoming(s)) => panic!("audio leaked to chat: {s:?}"),
             Ok(other) => panic!("unexpected event: {other:?}"),
         }

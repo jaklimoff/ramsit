@@ -207,10 +207,8 @@ impl App {
                     _ => {}
                 }
             }
-            Screen::Fatal { .. } => {
-                if key.code == KeyCode::Char('q') {
-                    quit = true;
-                }
+            Screen::Fatal { .. } if key.code == KeyCode::Char('q') => {
+                quit = true;
             }
             _ => {} // Discovering, Punching: nothing but the global quit
         }

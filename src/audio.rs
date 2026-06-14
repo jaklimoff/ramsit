@@ -150,14 +150,14 @@ fn encoder_loop(
     controls: Arc<Controls>,
     pcm_rx: Receiver<Vec<i16>>,
 ) {
-    let mut enc = match opus::Encoder::new(SAMPLE_RATE, opus::Channels::Mono, opus::Application::Voip)
-    {
-        Ok(e) => e,
-        Err(e) => {
-            log::warn!("audio: encoder init failed: {e}");
-            return;
-        }
-    };
+    let mut enc =
+        match opus::Encoder::new(SAMPLE_RATE, opus::Channels::Mono, opus::Application::Voip) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("audio: encoder init failed: {e}");
+                return;
+            }
+        };
     let mut buf: Vec<i16> = Vec::with_capacity(FRAME_SAMPLES * 4);
     let mut out = [0u8; 4000];
     let mut pkt = Vec::with_capacity(AUDIO_PREFIX.len() + 400);
