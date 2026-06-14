@@ -1,11 +1,9 @@
 # ramsit
 
-Tiny P2P terminal chat. Two people, direct UDP connection, NAT hole-punched
+Tiny P2P desktop chat. Two people, direct UDP connection, NAT hole-punched
 with STUN. No server, no relay, no account.
 
 ## Build
-
-    cargo build --release
 
 Voice links the system Opus library, so install it first:
 
@@ -13,43 +11,34 @@ Voice links the system Opus library, so install it first:
 - Debian/Ubuntu: `sudo apt install libopus-dev pkg-config`
 - Fedora: `sudo dnf install opus-devel pkgconf-pkg-config`
 
+Then install JS deps and run the desktop app in dev:
+
+    pnpm install
+    pnpm tauri dev
+
+Build a release bundle with:
+
+    pnpm tauri build
+
 ## Use
 
-On **both** machines run:
-
-    cargo run
-
-A full-screen TUI opens. It discovers your public code and shows it as
-`Your code: 203.0.113.5:54213`. Send your code to the other person
-(Signal/SMS/whatever) and paste theirs into the `Peer code:` field, then press
-Enter. Both sides should connect within ~60s of each other. Once connected, type
-messages and press Enter to send; PageUp/PageDown scroll the history; Esc (or
-Ctrl-C) quits.
-
-Pick a different STUN server with `--stun host:port` (default
-`stun.l.google.com:19302`).
+On **both** machines run `pnpm tauri dev` (or launch the built app). A window
+opens and shows `Your code: 203.0.113.5:54213`. Click **copy**, send your code to
+the other person (Signal/SMS/whatever), paste theirs into the **Peer code** field
+and click **Connect**. Both sides should connect within ~60s of each other. Once
+connected, type messages and press Enter to send.
 
 ## Voice
 
-Once two peers connect, the microphone goes live automatically and voice flows
-both ways over the same P2P UDP link (Opus, 48 kHz mono). It uses your system
-**default** input and output devices.
-
-Controls (in the chat screen):
-
-| Key | Action |
-| --- | --- |
-| `Ctrl-T` | Toggle mute (mic) |
-| `Ctrl-Up` / `Ctrl-Down` | Mic volume +/- 10% |
-| `Alt-Up` / `Alt-Down` | Speaker volume +/- 10% |
-
-Volume ranges 0–200% (digital gain). The status bar shows `[LIVE]`/`[MUTED]` and
-the current mic/speaker levels. If no audio device is available the call still
+Voice goes live automatically once two peers connect (Opus, 48 kHz mono, using
+your system **default** input and output devices). Use the **Mute** button and
+the **Mic**/**Speaker** sliders (0–200%) in the chat screen. The status shows
+`[LIVE]`/`[MUTED]`/`[no voice]`. If no audio device is available the call still
 works as text chat and shows `[no voice]`.
 
 ## Same local network (LAN)
 
-The code the TUI shows is your *public* endpoint. When both machines sit behind
+The code the app shows is your *public* endpoint. When both machines sit behind
 the same router it usually won't loop back (hairpinning), so on a shared LAN you
 exchange **local** addresses instead. Hole punching isn't needed here — there's
 no NAT between you — so you just point each side straight at the other.
@@ -59,14 +48,15 @@ On each machine:
 1. Find its LAN IP:
    - macOS: `ipconfig getifaddr en0`
    - Linux: `hostname -I | awk '{print $1}'`
-2. Find the UDP port `ramsit` bound (it's logged, not shown in the TUI):
+2. Find the UDP port `ramsit` bound (it's logged to `ramsit.log`):
 
        grep "socket: bound" ramsit.log
        # socket: bound to 0.0.0.0:54321   -> your local port is 54321
 
 Your LAN code is then `<LAN-IP>:<port>`, e.g. `192.168.1.42:54321`. Send that to
-the other person and paste *their* LAN code into `Peer code:` — instead of the
-public codes the TUI displays. Everything after connecting works the same.
+the other person and paste *their* LAN code into the **Peer code** field —
+instead of the public codes the app displays. Everything after connecting works
+the same.
 
 Note: `ramsit` still queries STUN at startup before it accepts a peer code, so
 both machines need to reach the internet even for a LAN-only chat. Only the
@@ -74,12 +64,11 @@ codes you exchange change.
 
 ## Debugging a failed connection
 
-`ramsit` writes logs to `ramsit.log` (the TUI owns the terminal, so logs can't
-go to the screen). By default it logs `info` (STUN result, connect,
-and — on failure — a summary of what arrived). For a full packet-by-packet
-trace, set `RUST_LOG=debug`:
+`ramsit` writes logs to `ramsit.log`. By default it logs `info` (STUN result,
+connect, and — on failure — a summary of what arrived). For a full
+packet-by-packet trace, set `RUST_LOG=debug` before launching:
 
-    RUST_LOG=debug cargo run
+    RUST_LOG=debug pnpm tauri dev
     # in another terminal:
     tail -f ramsit.log
 

@@ -1,2 +1,4 @@
 /target
 /ramsit.log
+node_modules
+dist
