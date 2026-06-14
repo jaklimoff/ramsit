@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { engine } from "../engine";
+import AudioTest from "../components/AudioTest";
 
 export default function Exchange({
   myCode,
@@ -40,6 +41,7 @@ export default function Exchange({
         <button type="submit">Connect</button>
       </form>
       {error && <p className="error">{error}</p>}
+      <AudioTest />
     </main>
   );
 }

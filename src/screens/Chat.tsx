@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { engine } from "../engine";
 import type { Screen } from "../reducer";
+import VuMeter from "../components/VuMeter";
 
 type ChatState = Extract<Screen, { kind: "chat" }>;
 
@@ -79,6 +80,8 @@ export default function Chat({
             onChange={(e) => engine.setOutputVolume(Number(e.target.value))}
           />
         </label>
+        <VuMeter channel="input" label="Mic" />
+        <VuMeter channel="output" label="Speaker" />
       </div>
 
       <form onSubmit={send}>
