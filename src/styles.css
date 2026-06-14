@@ -68,3 +68,8 @@ button { cursor: pointer; }
   border-top: 1px solid #333;
 }
 .chat form input { flex: 1; }
+
+.vu { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.vu-label { width: 64px; font-size: 12px; opacity: 0.8; }
+.vu-track { flex: 1; height: 10px; background: #222; border-radius: 5px; overflow: hidden; }
+.vu-fill { height: 100%; background: linear-gradient(90deg, #3a3, #cc3, #c33); transition: width 80ms linear; }
