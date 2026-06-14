@@ -185,7 +185,7 @@ impl App {
                     KeyCode::Down if ctrl => cmd = Some(Command::AdjustInputVolume(-10)),
                     KeyCode::Up if alt => cmd = Some(Command::AdjustOutputVolume(10)),
                     KeyCode::Down if alt => cmd = Some(Command::AdjustOutputVolume(-10)),
-                    KeyCode::Char(c) => input.push(c),
+                    KeyCode::Char(c) if !ctrl && !alt => input.push(c),
                     KeyCode::Backspace => {
                         input.pop();
                     }
