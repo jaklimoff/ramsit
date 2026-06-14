@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { engine } from "../engine";
+import DeviceSelect from "./DeviceSelect";
 import VuMeter from "./VuMeter";
 
 export default function AudioTest() {
@@ -34,6 +35,7 @@ export default function AudioTest() {
 
   return (
     <section className="audio-test">
+      <DeviceSelect />
       <div className="audio-test-controls">
         <button onClick={toggleTest}>
           {testing ? "Stop audio test" : "Test audio devices"}

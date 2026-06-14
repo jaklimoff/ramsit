@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { engine } from "../engine";
 import type { Screen } from "../reducer";
+import DeviceSelect from "../components/DeviceSelect";
 import VuMeter from "../components/VuMeter";
 
 type ChatState = Extract<Screen, { kind: "chat" }>;
@@ -54,6 +55,7 @@ export default function Chat({
       </div>
 
       <div className="voice">
+        <DeviceSelect />
         <span className="status">{status}</span>
         <button disabled={!state.voice} onClick={() => engine.toggleMute()}>
           {state.muted ? "Unmute" : "Mute"}
