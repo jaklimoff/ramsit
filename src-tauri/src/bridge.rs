@@ -46,7 +46,10 @@ fn start(app: AppHandle, state: State<AppState>) {
     *guard = Some(cmd_tx);
     std::thread::spawn(move || {
         while let Ok(ev) = evt_rx.recv() {
-            let _ = app.emit(EVENT_CHANNEL, event_to_json(&ev));
+            // Webview gone (reload/close race) — stop forwarding instead of spinning.
+            if app.emit(EVENT_CHANNEL, event_to_json(&ev)).is_err() {
+                break;
+            }
         }
     });
 }
@@ -90,6 +93,7 @@ fn quit(state: State<AppState>) {
 }
 
 /// Resolve a STUN host:port to its first IPv4 socket address.
+/// Panics if DNS is unavailable at startup — treated as a fatal misconfiguration.
 fn resolve_stun(s: &str) -> SocketAddr {
     s.to_socket_addrs()
         .ok()
@@ -120,7 +124,9 @@ pub fn run() {
                         let _ = tx.send(Command::Quit);
                     }
                 }
-                // Give the worker a beat to flush a best-effort BYE.
+                // Best-effort: give the worker up to 300ms to transmit a BYE.
+                // Not guaranteed under load or high-latency links (same trade-off
+                // the original TUI had).
                 std::thread::sleep(Duration::from_millis(300));
             }
         })
