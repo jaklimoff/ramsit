@@ -1,9 +1,11 @@
 use crate::audio::AudioState;
-use crate::audio_engine::{self, AudioEngineHandle, AudioEvent};
+use crate::audio_engine::{self, AudioEngineHandle, AudioEvent, DeviceList};
 use crate::net::{self, Command, Event};
 use crate::proto::parse_code;
+use crate::settings::Settings;
 use serde_json::{json, Value};
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -18,6 +20,8 @@ struct AppState {
     stun: SocketAddr,
     cmd_tx: Mutex<Option<Sender<Command>>>,
     audio: AudioEngineHandle,
+    settings: Mutex<Settings>,
+    config_dir: PathBuf,
 }
 
 /// Map an engine `Event` to the tagged JSON the frontend listens for.
@@ -121,6 +125,35 @@ fn play_test_tone(on: bool, state: State<AppState>) {
 }
 
 #[tauri::command]
+fn list_audio_devices(state: State<AppState>) -> DeviceList {
+    state.audio.list_devices()
+}
+
+#[tauri::command]
+fn set_input_device(name: Option<String>, state: State<AppState>) {
+    {
+        let mut s = state.settings.lock().unwrap();
+        s.input_device = name.clone();
+        if let Err(e) = s.save(&state.config_dir) {
+            log::warn!("settings: save failed: {e}");
+        }
+    }
+    state.audio.set_input_device(name);
+}
+
+#[tauri::command]
+fn set_output_device(name: Option<String>, state: State<AppState>) {
+    {
+        let mut s = state.settings.lock().unwrap();
+        s.output_device = name.clone();
+        if let Err(e) = s.save(&state.config_dir) {
+            log::warn!("settings: save failed: {e}");
+        }
+    }
+    state.audio.set_output_device(name);
+}
+
+#[tauri::command]
 fn quit(state: State<AppState>) {
     send(&state, Command::Quit);
 }
@@ -148,18 +181,22 @@ pub fn run() {
     tauri::Builder::default()
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            let config_dir = app.path().app_config_dir().expect("no app config dir");
+            let settings = Settings::load(&config_dir);
             let audio = audio_engine::spawn(
                 move |ev: AudioEvent| {
                     let _ = app_handle.emit(EVENT_CHANNEL, audio_event_json(&ev));
                 },
-                None,
-                None,
+                settings.input_device.clone(),
+                settings.output_device.clone(),
             )
             .expect("failed to start audio engine");
             app.manage(AppState {
                 stun,
                 cmd_tx: Mutex::new(None),
                 audio,
+                settings: Mutex::new(settings),
+                config_dir,
             });
             Ok(())
         })
@@ -187,6 +224,9 @@ pub fn run() {
             start_audio_test,
             stop_audio_test,
             play_test_tone,
+            list_audio_devices,
+            set_input_device,
+            set_output_device,
             quit,
         ])
         .run(tauri::generate_context!())
