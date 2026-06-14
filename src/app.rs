@@ -94,6 +94,8 @@ impl App {
             Event::Fatal(msg) => {
                 self.screen = Screen::Fatal { msg };
             }
+            // Audio events are handled by later UI tasks; ignore for now.
+            Event::AudioState(_) | Event::AudioUnavailable(_) => {}
         }
     }
 

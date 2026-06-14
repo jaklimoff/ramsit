@@ -1,4 +1,5 @@
-use crate::proto::{classify, would_block, PacketKind, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
+use crate::audio::{self, AudioHandle};
+use crate::proto::{classify, would_block, PacketKind, AUDIO_PREFIX, BYE, KEEPALIVE, MAX_CHAT_BYTES, RECV_BUF};
 use crate::punch;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -13,6 +14,9 @@ use stunclient::StunClient;
 pub enum Command {
     PeerCode(SocketAddr),
     Send(String),
+    ToggleMute,
+    AdjustInputVolume(i8),
+    AdjustOutputVolume(i8),
     Quit,
 }
 
@@ -22,12 +26,14 @@ pub enum Event {
     Discovered(SocketAddr),
     Connected(SocketAddr),
     Incoming(String),
+    AudioState(crate::audio::AudioState),
+    AudioUnavailable(String),
     PeerLeft,
     Fatal(String),
 }
 
 const POLL: Duration = Duration::from_millis(200);
-const KEEPALIVE_TICKS: u32 = 75; // 75 * 200ms = 15s
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Truncate a chat line to the wire limit on a UTF-8 char boundary, so a
 /// multi-byte char straddling the limit is never split (which would make the
@@ -117,16 +123,43 @@ fn worker(stun: SocketAddr, cmds: Receiver<Command>, events: Sender<Event>) {
         let _ = events.send(Event::Incoming(m));
     }
 
-    session(sock, peer, cmds, events);
+    // Start voice on the system default devices. Failure is non-fatal: chat
+    // continues. The stream guard must outlive the session, so hold it here.
+    let (_streams, audio) = match sock.try_clone() {
+        Ok(clone) => match audio::start(clone, peer) {
+            Ok((streams, handle)) => {
+                let _ = events.send(Event::AudioState(handle.state()));
+                (Some(streams), Some(handle))
+            }
+            Err(e) => {
+                warn!("audio: unavailable: {e}");
+                let _ = events.send(Event::AudioUnavailable(e.to_string()));
+                (None, None)
+            }
+        },
+        Err(e) => {
+            let _ = events.send(Event::AudioUnavailable(format!("socket clone failed: {e}")));
+            (None, None)
+        }
+    };
+
+    session(sock, peer, cmds, events, audio);
 }
 
 /// The post-connect bridge loop: forward outgoing `Send`s onto the socket,
-/// surface incoming chat/BYE as events, and refresh the NAT mapping on a timer.
-/// Factored out so a loopback test can drive it without STUN/punch.
-pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, events: Sender<Event>) {
+/// surface incoming chat/BYE as events, route voice frames to the audio engine,
+/// apply audio control commands, and refresh the NAT mapping on a timer.
+/// Factored out so a loopback test can drive it without STUN/punch (pass `None`).
+pub fn session(
+    sock: UdpSocket,
+    peer: SocketAddr,
+    cmds: Receiver<Command>,
+    events: Sender<Event>,
+    audio: Option<AudioHandle>,
+) {
     let _ = sock.set_read_timeout(Some(POLL));
     let mut buf = [0u8; RECV_BUF];
-    let mut ticks = 0u32;
+    let mut last_keepalive = std::time::Instant::now();
 
     loop {
         // Drain outgoing commands.
@@ -136,6 +169,21 @@ pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, event
                     let b = encode_chat(&line);
                     debug!("session: -> {peer} chat ({} bytes)", b.len());
                     let _ = sock.send_to(&b, peer);
+                }
+                Ok(Command::ToggleMute) => {
+                    if let Some(a) = &audio {
+                        let _ = events.send(Event::AudioState(a.toggle_mute()));
+                    }
+                }
+                Ok(Command::AdjustInputVolume(d)) => {
+                    if let Some(a) = &audio {
+                        let _ = events.send(Event::AudioState(a.adjust_input_volume(d)));
+                    }
+                }
+                Ok(Command::AdjustOutputVolume(d)) => {
+                    if let Some(a) = &audio {
+                        let _ = events.send(Event::AudioState(a.adjust_output_volume(d)));
+                    }
                 }
                 Ok(Command::Quit) => {
                     debug!("session: -> {peer} BYE (local quit)");
@@ -155,13 +203,20 @@ pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, event
         match sock.recv_from(&mut buf) {
             Ok((n, from)) if from.ip() == peer.ip() => {
                 let kind = classify(&buf[..n]);
-                debug!("session: <- {from} {kind:?} ({n} bytes)");
+                if kind != PacketKind::Audio {
+                    debug!("session: <- {from} {kind:?} ({n} bytes)");
+                }
                 match kind {
                     PacketKind::Chat => {
                         if let Ok(s) = std::str::from_utf8(&buf[..n]) {
                             if events.send(Event::Incoming(s.to_string())).is_err() {
                                 return; // UI gone
                             }
+                        }
+                    }
+                    PacketKind::Audio => {
+                        if let Some(a) = &audio {
+                            a.play(&buf[AUDIO_PREFIX.len()..n]);
                         }
                     }
                     PacketKind::Bye => {
@@ -176,10 +231,9 @@ pub fn session(sock: UdpSocket, peer: SocketAddr, cmds: Receiver<Command>, event
             Err(_) => return,
         }
 
-        ticks += 1;
-        if ticks >= KEEPALIVE_TICKS {
+        if last_keepalive.elapsed() >= KEEPALIVE_INTERVAL {
             let _ = sock.send_to(KEEPALIVE, peer);
-            ticks = 0;
+            last_keepalive = std::time::Instant::now();
         }
     }
 }
@@ -218,8 +272,8 @@ mod tests {
         let (b_cmd_tx, b_cmd_rx) = channel();
         let (b_evt_tx, b_evt_rx) = channel();
 
-        let ha = thread::spawn(move || session(a, b_addr, a_cmd_rx, a_evt_tx));
-        let hb = thread::spawn(move || session(b, a_addr, b_cmd_rx, b_evt_tx));
+        let ha = thread::spawn(move || session(a, b_addr, a_cmd_rx, a_evt_tx, None));
+        let hb = thread::spawn(move || session(b, a_addr, b_cmd_rx, b_evt_tx, None));
 
         a_cmd_tx.send(Command::Send("hello bro".into())).unwrap();
         match b_evt_rx.recv_timeout(Duration::from_secs(2)).unwrap() {
@@ -231,5 +285,29 @@ mod tests {
         b_cmd_tx.send(Command::Quit).unwrap();
         let _ = ha.join();
         let _ = hb.join();
+    }
+
+    #[test]
+    fn session_does_not_surface_audio_as_chat() {
+        use crate::proto::AUDIO_PREFIX;
+        let b = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b_addr = b.local_addr().unwrap();
+        let peer = "127.0.0.1:9".parse().unwrap(); // session B's notion of its peer
+
+        let (_b_cmd_tx, b_cmd_rx) = channel();
+        let (b_evt_tx, b_evt_rx) = channel();
+        let hb = thread::spawn(move || session(b, peer, b_cmd_rx, b_evt_tx, None));
+
+        let spoof = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut pkt = AUDIO_PREFIX.to_vec();
+        pkt.extend_from_slice(&[0x10, 0x20, 0x30]);
+        spoof.send_to(&pkt, b_addr).unwrap();
+
+        match b_evt_rx.recv_timeout(Duration::from_millis(400)) {
+            Err(_) => {}                                          // good: dropped
+            Ok(Event::Incoming(s)) => panic!("audio leaked to chat: {s:?}"),
+            Ok(other) => panic!("unexpected event: {other:?}"),
+        }
+        drop(hb); // detached; process ends it
     }
 }
