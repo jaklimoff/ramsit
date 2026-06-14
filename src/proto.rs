@@ -28,8 +28,8 @@ pub enum PacketKind {
     Chat,
 }
 
-/// Map raw bytes to a packet kind. Only exact control byte-strings are
-/// control; everything else is a chat message.
+/// Map raw bytes to a packet kind. Voice frames are matched by the `\x00AUD`
+/// prefix; other control kinds are exact byte-strings; everything else is chat.
 pub fn classify(buf: &[u8]) -> PacketKind {
     // Chat text never starts with the sentinel, so short-circuit it.
     if buf.first() != Some(&SENTINEL) {
