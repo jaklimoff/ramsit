@@ -2,3 +2,4 @@
 /ramsit.log
 node_modules
 dist
+.superpowers/
