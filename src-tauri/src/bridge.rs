@@ -198,6 +198,17 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 config_dir,
             });
+            #[cfg(target_os = "macos")]
+            {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) =
+                        apply_vibrancy(&window, NSVisualEffectMaterial::HudWindow, None, None)
+                    {
+                        log::warn!("window vibrancy unavailable: {e}");
+                    }
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
