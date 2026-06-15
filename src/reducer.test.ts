@@ -16,14 +16,14 @@ describe("reducer", () => {
   it("incoming appends a peer message in chat", () => {
     let s = reduce(initialState, { type: "connected", peer: "p" });
     s = reduce(s, { type: "incoming", text: "yo" });
-    if (s.kind === "chat") expect(s.messages).toEqual(["peer> yo"]);
+    if (s.kind === "chat") expect(s.messages).toEqual([{ from: "peer", text: "yo" }]);
     else throw new Error("expected chat");
   });
 
   it("local echo appends a you message", () => {
     let s = reduce(initialState, { type: "connected", peer: "p" });
     s = reduce(s, { type: "sent", text: "hello" });
-    if (s.kind === "chat") expect(s.messages).toEqual(["you> hello"]);
+    if (s.kind === "chat") expect(s.messages).toEqual([{ from: "me", text: "hello" }]);
     else throw new Error("expected chat");
   });
 
@@ -42,7 +42,7 @@ describe("reducer", () => {
     s = reduce(s, { type: "peerLeft" });
     if (s.kind === "chat") {
       expect(s.connected).toBe(false);
-      expect(s.messages.some((m) => m.includes("disconnected"))).toBe(true);
+      expect(s.messages.some((m) => m.text.includes("disconnected"))).toBe(true);
     } else throw new Error("expected chat");
   });
 
@@ -51,7 +51,7 @@ describe("reducer", () => {
     s = reduce(s, { type: "audioUnavailable", reason: "no mic" });
     if (s.kind === "chat") {
       expect(s.voice).toBe(false);
-      expect(s.messages.some((m) => m.includes("voice unavailable"))).toBe(true);
+      expect(s.messages.some((m) => m.text.includes("voice unavailable"))).toBe(true);
     } else throw new Error("expected chat");
   });
 

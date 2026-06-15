@@ -1,5 +1,7 @@
 import type { EngineEvent } from "./engine";
 
+export type Message = { from: "me" | "peer" | "system"; text: string };
+
 export type Screen =
   | { kind: "discovering" }
   | { kind: "exchange"; myCode: string }
@@ -7,7 +9,7 @@ export type Screen =
   | {
       kind: "chat";
       peer: string;
-      messages: string[];
+      messages: Message[];
       connected: boolean;
       muted: boolean;
       inputVol: number;
@@ -40,11 +42,11 @@ export function reduce(state: Screen, action: Action): Screen {
       };
     case "incoming":
       return state.kind === "chat"
-        ? { ...state, messages: [...state.messages, `peer> ${action.text}`] }
+        ? { ...state, messages: [...state.messages, { from: "peer", text: action.text }] }
         : state;
     case "sent":
       return state.kind === "chat"
-        ? { ...state, messages: [...state.messages, `you> ${action.text}`] }
+        ? { ...state, messages: [...state.messages, { from: "me", text: action.text }] }
         : state;
     case "audioState":
       return state.kind === "chat"
@@ -61,7 +63,10 @@ export function reduce(state: Screen, action: Action): Screen {
         ? {
             ...state,
             voice: false,
-            messages: [...state.messages, `* voice unavailable: ${action.reason} *`],
+            messages: [
+              ...state.messages,
+              { from: "system", text: `voice unavailable: ${action.reason}` },
+            ],
           }
         : state;
     case "peerLeft":
@@ -69,7 +74,7 @@ export function reduce(state: Screen, action: Action): Screen {
         ? {
             ...state,
             connected: false,
-            messages: [...state.messages, "* peer disconnected *"],
+            messages: [...state.messages, { from: "system", text: "peer disconnected" }],
           }
         : state;
     case "fatal":

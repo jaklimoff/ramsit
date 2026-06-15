@@ -11,6 +11,7 @@ export default function Exchange({
 }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,26 +23,51 @@ export default function Exchange({
     }
   }
 
+  function copy() {
+    navigator.clipboard.writeText(myCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  }
+
   return (
-    <main className="center">
-      <p>
-        Your code: <code>{myCode}</code>{" "}
-        <button onClick={() => navigator.clipboard.writeText(myCode)}>copy</button>
-      </p>
-      <form onSubmit={submit}>
-        <input
-          autoFocus
-          placeholder="Peer code (1.2.3.4:5678)"
-          value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setError(null);
-          }}
-        />
-        <button type="submit">Connect</button>
-      </form>
-      {error && <p className="error">{error}</p>}
-      <AudioTest />
+    <main className="setup">
+      <div className="setup-card">
+        <header className="setup-head">
+          <h1>Ramsit</h1>
+          <p className="subtle">Share your code, or connect to a peer.</p>
+        </header>
+
+        <div className="field-group">
+          <span className="field-label">Your code</span>
+          <div className="code-pill">
+            <code>{myCode}</code>
+            <button className="btn tinted" onClick={copy}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        </div>
+
+        <form className="field-group" onSubmit={submit}>
+          <span className="field-label">Connect to a peer</span>
+          <div className="connect-row">
+            <input
+              autoFocus
+              placeholder="1.2.3.4:5678"
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setError(null);
+              }}
+            />
+            <button type="submit" disabled={!input.trim()}>
+              Connect
+            </button>
+          </div>
+          {error && <p className="error">{error}</p>}
+        </form>
+
+        <AudioTest />
+      </div>
     </main>
   );
 }
