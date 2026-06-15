@@ -60,6 +60,14 @@ button, input, select {
   box-shadow: none;
 }
 
+/* tinted button: quiet alternative to the solid accent CTA */
+.btn.tinted {
+  background: var(--surface-2);
+  color: var(--accent);
+  box-shadow: none;
+}
+.btn.tinted:disabled { color: var(--text-secondary); }
+
 input:not([type="range"]), .field, select {
   background: var(--surface-2);
   border: 0.5px solid var(--separator);
@@ -90,6 +98,86 @@ input[type="range"] { accent-color: var(--accent); }
   padding: 2px 6px;
   border-radius: 6px;
 }
+
+/* ---- setup / connect screen ---- */
+.setup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 56px 20px 28px; /* top clears overlay traffic lights */
+}
+.setup-card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.setup-head { text-align: center; }
+.setup-head h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.setup-head .subtle {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.field-group { display: flex; flex-direction: column; gap: 7px; }
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.code-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--separator);
+  border-radius: 10px;
+  padding: 5px 5px 5px 12px;
+}
+.code-pill code {
+  flex: 1;
+  font-size: 14px;
+  font-feature-settings: "tnum";
+  user-select: all;
+}
+.code-pill button { flex: 0 0 auto; padding: 6px 14px; }
+
+.connect-row { display: flex; gap: 8px; }
+.connect-row input { flex: 1; min-width: 0; }
+.connect-row button { flex: 0 0 auto; }
+
+/* inset grouped list of device rows */
+.device-group {
+  background: var(--surface-2);
+  border: 0.5px solid var(--separator);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.device-group .device-row {
+  flex: none; /* override the chat voice-bar stretch */
+  min-width: 0;
+  padding: 10px 12px;
+}
+.device-group .device-row + .device-row {
+  border-top: 0.5px solid var(--separator);
+}
+.device-group select {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 2px 0;
+  font-weight: 600;
+}
+.device-group select:focus-visible { outline: none; }
 
 /* transparent drag handle across the top of every screen (no native titlebar).
    44px tall and content keeps clear of it, so it never blocks interaction. */
@@ -220,5 +308,6 @@ input[type="range"] { accent-color: var(--accent); }
 }
 
 /* audio test panel */
-.audio-test { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 360px; }
-.audio-test-controls { display: flex; gap: 8px; justify-content: center; }
+.audio-test { display: flex; flex-direction: column; gap: 7px; width: 100%; }
+.audio-test-controls { display: flex; gap: 8px; margin-top: 4px; }
+.audio-test-controls button { flex: 1; }
