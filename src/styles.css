@@ -104,6 +104,8 @@ input[type="range"] { accent-color: var(--accent); }
   font-size: 13px;
   color: var(--text-secondary);
 }
+/* let drags pass through the informational labels to the drag region */
+.titlebar > span { pointer-events: none; }
 .titlebar .peer { font-weight: 600; color: var(--text); }
 .titlebar .status {
   padding: 2px 9px;
