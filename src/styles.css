@@ -11,7 +11,7 @@
   --accent: #0a84ff;
   --danger: #ff453a;
   --ok: #34c759;
-  --bubble-them: rgba(118, 118, 128, 0.16);
+  --bubble-peer: rgba(118, 118, 128, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -21,7 +21,7 @@
     --text: #f2f2f5;
     --text-secondary: rgba(235, 235, 245, 0.6);
     --separator: rgba(255, 255, 255, 0.1);
-    --bubble-them: rgba(118, 118, 128, 0.32);
+    --bubble-peer: rgba(118, 118, 128, 0.32);
   }
 }
 
@@ -132,7 +132,7 @@ input[type="range"] { accent-color: var(--accent); }
   word-break: break-word;
 }
 .bubble.me { align-self: flex-end; background: var(--accent); color: #fff; }
-.bubble.them { align-self: flex-start; background: var(--bubble-them); color: var(--text); }
+.bubble.peer { align-self: flex-start; background: var(--bubble-peer); color: var(--text); }
 .bubble.system {
   align-self: center;
   background: none;
