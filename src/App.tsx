@@ -29,18 +29,28 @@ export default function App() {
       ? { kind: "punching", peer: punching }
       : state;
 
-  switch (screen.kind) {
-    case "discovering":
-      return <Discovering />;
-    case "exchange":
-      return <Exchange myCode={screen.myCode} onPunching={setPunching} />;
-    case "punching":
-      return <Punching peer={screen.peer} />;
-    case "chat":
-      return (
-        <Chat state={screen} onSent={(text) => dispatch({ type: "sent", text })} />
-      );
-    case "fatal":
-      return <Fatal message={screen.message} />;
+  function renderScreen() {
+    switch (screen.kind) {
+      case "discovering":
+        return <Discovering />;
+      case "exchange":
+        return <Exchange myCode={screen.myCode} onPunching={setPunching} />;
+      case "punching":
+        return <Punching peer={screen.peer} />;
+      case "chat":
+        return (
+          <Chat state={screen} onSent={(text) => dispatch({ type: "sent", text })} />
+        );
+      case "fatal":
+        return <Fatal message={screen.message} />;
+    }
   }
+
+  return (
+    <>
+      {/* No native titlebar, so a transparent top strip makes every screen draggable. */}
+      <div className="drag-strip" data-tauri-drag-region />
+      {renderScreen()}
+    </>
+  );
 }
