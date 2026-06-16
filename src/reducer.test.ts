@@ -3,9 +3,16 @@ import { initialState, reduce } from "./reducer";
 
 describe("reducer", () => {
   it("discovered moves to exchange", () => {
-    const s = reduce(initialState, { type: "discovered", code: "1.2.3.4:5" });
+    const s = reduce(initialState, {
+      type: "discovered",
+      code: "1.2.3.4:5",
+      localCode: "192.168.0.2:5",
+    });
     expect(s.kind).toBe("exchange");
-    if (s.kind === "exchange") expect(s.myCode).toBe("1.2.3.4:5");
+    if (s.kind === "exchange") {
+      expect(s.myCode).toBe("1.2.3.4:5");
+      expect(s.localCode).toBe("192.168.0.2:5");
+    }
   });
 
   it("connected moves to chat", () => {

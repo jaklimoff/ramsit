@@ -4,7 +4,7 @@ export type Message = { from: "me" | "peer" | "system"; text: string };
 
 export type Screen =
   | { kind: "discovering" }
-  | { kind: "exchange"; myCode: string }
+  | { kind: "exchange"; myCode: string; localCode: string | null }
   | { kind: "punching"; peer: string }
   | {
       kind: "chat";
@@ -27,7 +27,7 @@ export function reduce(state: Screen, action: Action): Screen {
   switch (action.type) {
     case "discovered":
       return state.kind === "discovering"
-        ? { kind: "exchange", myCode: action.code }
+        ? { kind: "exchange", myCode: action.code, localCode: action.localCode }
         : state;
     case "connected":
       return {

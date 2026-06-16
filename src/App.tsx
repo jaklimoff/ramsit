@@ -34,7 +34,13 @@ export default function App() {
       case "discovering":
         return <Discovering />;
       case "exchange":
-        return <Exchange myCode={screen.myCode} onPunching={setPunching} />;
+        return (
+          <Exchange
+            myCode={screen.myCode}
+            localCode={screen.localCode}
+            onPunching={setPunching}
+          />
+        );
       case "punching":
         return <Punching peer={screen.peer} />;
       case "chat":

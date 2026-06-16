@@ -133,6 +133,7 @@ input[type="range"] { accent-color: var(--accent); }
   font-weight: 600;
   color: var(--text-secondary);
 }
+.field-hint { font-weight: 400; opacity: 0.75; }
 
 .code-pill {
   display: flex;

@@ -27,7 +27,11 @@ struct AppState {
 /// Map an engine `Event` to the tagged JSON the frontend listens for.
 fn event_to_json(ev: &Event) -> Value {
     match ev {
-        Event::Discovered(addr) => json!({ "type": "discovered", "code": addr.to_string() }),
+        Event::Discovered { public, local } => json!({
+            "type": "discovered",
+            "code": public.to_string(),
+            "localCode": local.map(|a| a.to_string()),
+        }),
         Event::Connected(addr) => json!({ "type": "connected", "peer": addr.to_string() }),
         Event::Incoming(s) => json!({ "type": "incoming", "text": s }),
         Event::PeerLeft => json!({ "type": "peerLeft" }),
@@ -272,9 +276,21 @@ mod tests {
 
     #[test]
     fn maps_discovered_addr_as_string() {
-        let addr = "203.0.113.5:54213".parse().unwrap();
-        let v = event_to_json(&Event::Discovered(addr));
+        let v = event_to_json(&Event::Discovered {
+            public: "203.0.113.5:54213".parse().unwrap(),
+            local: Some("192.168.1.42:54213".parse().unwrap()),
+        });
         assert_eq!(v["type"], "discovered");
         assert_eq!(v["code"], "203.0.113.5:54213");
+        assert_eq!(v["localCode"], "192.168.1.42:54213");
+    }
+
+    #[test]
+    fn maps_discovered_without_local_as_null() {
+        let v = event_to_json(&Event::Discovered {
+            public: "203.0.113.5:54213".parse().unwrap(),
+            local: None,
+        });
+        assert_eq!(v["localCode"], serde_json::Value::Null);
     }
 }
