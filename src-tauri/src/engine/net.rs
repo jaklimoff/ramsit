@@ -5,7 +5,7 @@ use crate::proto::{
 use crate::punch;
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -23,7 +23,12 @@ pub enum Command {
 /// emitted by the AudioEngine directly (see bridge), not through this channel.
 #[derive(Debug)]
 pub enum Event {
-    Discovered(SocketAddr),
+    /// `public` is the STUN-discovered internet endpoint; `local` is our LAN
+    /// `ip:port` for same-network peers (None if the LAN IP can't be learned).
+    Discovered {
+        public: SocketAddr,
+        local: Option<SocketAddr>,
+    },
     Connected(SocketAddr),
     Incoming(String),
     PeerLeft,
@@ -42,6 +47,15 @@ pub fn encode_chat(line: &str) -> Vec<u8> {
         end -= 1;
     }
     line.as_bytes()[..end].to_vec()
+}
+
+/// Learn our LAN IP by asking the OS which local interface routes toward a
+/// public address. UDP `connect` sends nothing — it just fixes the source
+/// interface — so this needs no reachable network, only a default route.
+fn lan_ip() -> Option<IpAddr> {
+    let probe = UdpSocket::bind("0.0.0.0:0").ok()?;
+    probe.connect("8.8.8.8:80").ok()?;
+    probe.local_addr().ok().map(|a| a.ip())
 }
 
 /// Query our public endpoint via STUN, retrying up to 3× (UDP can drop the
@@ -100,7 +114,11 @@ fn worker(stun: SocketAddr, audio: AudioEngineHandle, cmds: Receiver<Command>, e
         }
     };
     info!("stun: discovered public endpoint {my}");
-    let _ = events.send(Event::Discovered(my));
+    // Pair the LAN IP with our actual bound port so a same-network peer can punch
+    // straight to us without STUN/NAT.
+    let local = lan_ip().and_then(|ip| sock.local_addr().ok().map(|a| SocketAddr::new(ip, a.port())));
+    info!("lan: local endpoint {}", local.map(|a| a.to_string()).unwrap_or_else(|| "unavailable".into()));
+    let _ = events.send(Event::Discovered { public: my, local });
 
     // Wait for the peer code (or an early quit / UI gone).
     let code = loop {

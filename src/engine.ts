@@ -9,7 +9,7 @@ export type DeviceList = {
 };
 
 export type EngineEvent =
-  | { type: "discovered"; code: string }
+  | { type: "discovered"; code: string; localCode: string | null }
   | { type: "connected"; peer: string }
   | { type: "incoming"; text: string }
   | { type: "audioState"; muted: boolean; inputVol: number; outputVol: number }
