@@ -30,6 +30,22 @@
 /* transparent so native window vibrancy shows through */
 body { margin: 0; background: transparent; color: var(--text); }
 
+/* Windows lacks native vibrancy: force the dark palette and paint an opaque,
+   subtly-lit dark backdrop so the window never reads as fully transparent. */
+:root.win {
+  color-scheme: dark;
+  --surface: rgba(118, 118, 128, 0.24);
+  --surface-2: rgba(118, 118, 128, 0.24);
+  --text: #f2f2f5;
+  --text-secondary: rgba(235, 235, 245, 0.6);
+  --separator: rgba(255, 255, 255, 0.1);
+  --bubble-peer: rgba(118, 118, 128, 0.32);
+}
+:root.win body {
+  background:
+    radial-gradient(120% 90% at 50% 0%, #2a2a2e 0%, #1c1c1f 55%, #161618 100%);
+}
+
 .error, .bad { color: var(--danger); }
 .ok { color: var(--ok); }
 
