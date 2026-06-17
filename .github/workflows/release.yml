@@ -1,16 +1,52 @@
 name: release
 
-# Push a tag like v0.1.0 to build both platforms and publish a GitHub Release.
+# Push to main: semantic-release reads the conventional-commit history,
+# bumps the version, tags it, and publishes a GitHub Release. When a release
+# is cut, the build job attaches the macOS + Windows installers to it.
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.semantic.outputs.new_release_published }}
+      version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Semantic release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: |
+            @semantic-release/changelog
+            @semantic-release/exec
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
+    needs: release
+    if: needs.release.outputs.published == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -24,7 +60,11 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
+      # Check out the tag semantic-release just created, which carries the
+      # bumped version in tauri.conf.json / Cargo.toml.
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.version }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -48,7 +88,7 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build and release
+      - name: Build and attach to release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -56,9 +96,9 @@ jobs:
           # minimum, which CMake 4.x (on the runners) rejects. Allow it.
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "ramsit ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install this version."
-          releaseDraft: true
+          # Upload to the release semantic-release already published for this tag.
+          tagName: v${{ needs.release.outputs.version }}
+          releaseName: "ramsit v${{ needs.release.outputs.version }}"
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
