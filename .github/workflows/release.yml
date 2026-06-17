@@ -52,6 +52,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # audiopus_sys bundles libopus whose CMakeLists declares a pre-3.5
+          # minimum, which CMake 4.x (on the runners) rejects. Allow it.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "ramsit ${{ github.ref_name }}"
