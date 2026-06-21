@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { engine } from "../engine";
 import type { Screen } from "../reducer";
 import DeviceSelect from "../components/DeviceSelect";
+import { linkify } from "../linkify";
 
 type ChatState = Extract<Screen, { kind: "chat" }>;
 
@@ -55,7 +56,7 @@ export default function Chat({
       <div className="log" ref={logRef}>
         {state.messages.map((m, i) => (
           <div key={i} className={`bubble ${m.from}`}>
-            {m.text}
+            {linkify(m.text)}
           </div>
         ))}
       </div>
