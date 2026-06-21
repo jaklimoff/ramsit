@@ -258,6 +258,8 @@ input[type="range"] { accent-color: var(--accent); }
   font-size: 12px;
   font-style: italic;
 }
+.bubble a { color: var(--accent); text-decoration: underline; }
+.bubble.me a { color: #fff; text-decoration: underline; }
 
 /* voice bar */
 .voice {
