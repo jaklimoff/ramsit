@@ -1,4 +1,5 @@
 // src/linkify.tsx
+import type { ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const URL_RE = /(https?:\/\/[^\s]+)/g;
@@ -32,8 +33,8 @@ function splitTrailing(url: string): [string, string] {
   return [u, suffix];
 }
 
-export function linkify(text: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
+export function linkify(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
   let lastIndex = 0;
   let key = 0;
 
