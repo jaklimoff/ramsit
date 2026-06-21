@@ -183,6 +183,7 @@ pub fn run() {
     log::info!("stun: using server {DEFAULT_STUN} ({stun})");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let config_dir = app.path().app_config_dir().expect("no app config dir");
