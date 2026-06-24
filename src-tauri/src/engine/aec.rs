@@ -197,4 +197,29 @@ mod tests {
         }
         assert!(out_sum < in_sum * 0.25, "expected >6dB cancellation: in={in_sum} out={out_sum}");
     }
+
+    #[cfg(feature = "aec")]
+    #[test]
+    fn capture_is_processed_every_frame() {
+        // process_capture must mutate the frame regardless of any mute decision
+        // (mute lives in CallSink, not Aec). Feed matched render+echo and assert
+        // the frame changes — proving the canceller runs unconditionally.
+        let mut aec = Aec::new(SAMPLE_RATE).unwrap();
+        let mut st = 0x0fed_cba9_8765_4321u64;
+        let mut render = vec![0i16; APM_FRAME * 2];
+        let mut changed = false;
+        for _ in 0..100 {
+            for s in render.iter_mut() {
+                st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *s = (((st >> 40) as i32 & 0x7fff) - 16384) as i16;
+            }
+            aec.feed_render(&render);
+            let mut near = render.clone();
+            aec.process_capture(&mut near);
+            if near != render {
+                changed = true;
+            }
+        }
+        assert!(changed, "process_capture must alter the frame in place");
+    }
 }
