@@ -405,7 +405,7 @@ fn open_streams(
             // force a sync on the first chunk regardless of the current epoch
             let mut epoch = shared.aec_epoch.load(Ordering::Relaxed).wrapping_sub(1);
             while let Ok(chunk) = pcm_rx.recv() {
-                let cur = shared.aec_epoch.load(Ordering::Relaxed);
+                let cur = shared.aec_epoch.load(Ordering::Acquire);
                 if cur != epoch {
                     epoch = cur;
                     aec = if shared.aec_wanted.load(Ordering::Relaxed) {
@@ -488,7 +488,7 @@ fn build_call_sink(
 /// thread (re)builds or drops its thread-local `Aec` on the next mic chunk.
 fn set_aec_wanted(shared: &Arc<Shared>, wanted: bool) {
     shared.aec_wanted.store(wanted, Ordering::Relaxed);
-    shared.aec_epoch.fetch_add(1, Ordering::Relaxed);
+    shared.aec_epoch.fetch_add(1, Ordering::Release);
 }
 
 /// Apply a device change by reopening the streams (Phase 2 is not seamless). No-op when
