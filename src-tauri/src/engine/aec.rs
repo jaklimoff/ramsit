@@ -5,6 +5,7 @@
 //!
 //! AEC3 frames are f32 in i16 range (±32768) — see `to_f32`/`to_i16`.
 
+#[cfg(feature = "aec")]
 use crate::audio::{MonoResampler, SAMPLE_RATE};
 use anyhow::Result;
 
@@ -14,15 +15,18 @@ use aec3::nodes::audio::AudioFormat;
 use aec3::pipelines::linear::{self, LinearPipeline};
 
 /// AEC3 frame length: 10 ms at 48 kHz.
+#[allow(dead_code)]
 pub(crate) const APM_FRAME: usize = 480;
 
 /// Append `src` (i16) to `dst` as f32 in i16 range (±32768). AEC3 expects this
 /// scaling, NOT normalized [-1.0, 1.0].
+#[allow(dead_code)]
 pub(crate) fn to_f32(src: &[i16], dst: &mut Vec<f32>) {
     dst.extend(src.iter().map(|&s| s as f32));
 }
 
 /// Write `src` (f32, i16-range) back to `dst` (i16), clamping. Lengths must match.
+#[allow(dead_code)]
 pub(crate) fn to_i16(src: &[f32], dst: &mut [i16]) {
     for (o, &s) in dst.iter_mut().zip(src.iter()) {
         *o = s.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
@@ -30,15 +34,18 @@ pub(crate) fn to_i16(src: &[f32], dst: &mut [i16]) {
 }
 
 /// Buffers arbitrary-length i16 input and drains exactly `APM_FRAME`-sized frames.
+#[allow(dead_code)]
 #[derive(Default)]
 pub(crate) struct Framer {
     buf: Vec<i16>,
 }
 
 impl Framer {
+    #[allow(dead_code)]
     pub(crate) fn push(&mut self, samples: &[i16]) {
         self.buf.extend_from_slice(samples);
     }
+    #[allow(dead_code)]
     pub(crate) fn next_frame(&mut self) -> Option<Vec<i16>> {
         if self.buf.len() >= APM_FRAME {
             Some(self.buf.drain(..APM_FRAME).collect())
