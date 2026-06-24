@@ -262,6 +262,40 @@ where
     Ok(stream)
 }
 
+/// Bounded handoff of the post-gain output (render reference) to the capture-pump
+/// thread. Mirrors the `jitter` buffer pattern. Drops oldest on overflow (overflow
+/// means the pump stalled — anomalous).
+pub(crate) struct RenderRef {
+    q: Mutex<VecDeque<i16>>,
+    cap: usize,
+}
+
+impl RenderRef {
+    pub(crate) fn new(cap: usize) -> Self {
+        Self { q: Mutex::new(VecDeque::new()), cap }
+    }
+
+    /// Push a callback's worth of mono samples; one lock per callback.
+    pub(crate) fn push_slice(&self, samples: &[i16]) {
+        if samples.is_empty() {
+            return;
+        }
+        let mut q = self.q.lock().unwrap();
+        for &s in samples {
+            if q.len() >= self.cap {
+                q.pop_front();
+            }
+            q.push_back(s);
+        }
+    }
+
+    /// Move all available samples into `out` (appends; non-blocking).
+    pub(crate) fn drain_into(&self, out: &mut Vec<i16>) {
+        let mut q = self.q.lock().unwrap();
+        out.extend(q.drain(..));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,5 +382,31 @@ mod tests {
         let mut dec_buf = [0i16; FRAME_SAMPLES];
         let m = dec.decode(&enc_buf[..n], &mut dec_buf, false).unwrap();
         assert_eq!(m, FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn render_ref_push_then_drain() {
+        let r = RenderRef::new(100);
+        r.push_slice(&[1, 2, 3]);
+        let mut out = Vec::new();
+        r.drain_into(&mut out);
+        assert_eq!(out, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn render_ref_drops_oldest_over_cap() {
+        let r = RenderRef::new(3);
+        r.push_slice(&[1, 2, 3, 4, 5]);
+        let mut out = Vec::new();
+        r.drain_into(&mut out);
+        assert_eq!(out, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn render_ref_drain_empty_is_empty() {
+        let r = RenderRef::new(10);
+        let mut out = vec![9];
+        r.drain_into(&mut out);
+        assert_eq!(out, vec![9], "drain appends nothing when empty");
     }
 }
