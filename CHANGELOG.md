@@ -1,3 +1,21 @@
+# [0.3.0](https://github.com/jaklimoff/ramsit/compare/v0.2.0...v0.3.0) (2026-06-25)
+
+
+### Bug Fixes
+
+* **aec:** Release/Acquire on aec_epoch signal for weak-memory correctness ([0662d86](https://github.com/jaklimoff/ramsit/commit/0662d86de56600936d31c8f85332fe24ec3809f7))
+
+
+### Features
+
+* acoustic echo cancellation via pure-Rust aec3 ([8f80b1a](https://github.com/jaklimoff/ramsit/commit/8f80b1a2e4511b1f8c09a0f242a7f57703b43209))
+* **aec:** add aec3 dep behind default 'aec' feature ([399d1e2](https://github.com/jaklimoff/ramsit/commit/399d1e2efcee125847c2a997d480b07e4867df60))
+* **aec:** Aec owns aec3 pipeline with render feed + in-place capture cancel ([0c4ba0e](https://github.com/jaklimoff/ramsit/commit/0c4ba0ed1ea3718b7a4b5bb7d7782d4bf16712c8))
+* **aec:** i16<->f32 (i16-range) conversion and 480-sample framer ([8dec7b0](https://github.com/jaklimoff/ramsit/commit/8dec7b0f7a9802ecbb549ae4832dbbbe3a881c08))
+* **aec:** output callback pushes post-gain render reference when aec_wanted ([c0e7acf](https://github.com/jaklimoff/ramsit/commit/c0e7acfbbd448d61081fb217d7513a742bbc0d08))
+* **aec:** pump thread owns aec3 pipeline; engine drives AEC via atomics ([6aeba4a](https://github.com/jaklimoff/ramsit/commit/6aeba4a4f19cc645dfe62de2f25e4e9e7e0f1924))
+* **aec:** RenderRef bounded queue for output->pump render handoff ([4dd9349](https://github.com/jaklimoff/ramsit/commit/4dd9349ccc8a7045e9e093b4f822b434030b3917))
+
 # [0.2.0](https://github.com/jaklimoff/ramsit/compare/v0.1.1...v0.2.0) (2026-06-21)
 
 
