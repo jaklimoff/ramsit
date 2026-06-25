@@ -3,9 +3,10 @@
 //! a UI-agnostic `AudioEvent` callback (the bridge maps it to a Tauri event). The
 //! engine is the single owner of audio for both the solo self-test and live calls.
 
+use crate::engine::aec::Aec;
 use crate::audio::{
     build_input, build_output, clamp_vol, prefers_48k, AudioState, AudioStreams, Controls,
-    MonoResampler, FRAME_SAMPLES, SAMPLE_RATE,
+    MonoResampler, RenderRef, FRAME_SAMPLES, SAMPLE_RATE,
 };
 use crate::meter::Meters;
 use crate::proto::AUDIO_PREFIX;
@@ -15,7 +16,7 @@ use cpal::{BufferSize, StreamConfig};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -63,6 +64,10 @@ pub(crate) struct Shared {
     pub out_resampler: Mutex<Option<MonoResampler>>,
     pub tone_active: Arc<AtomicBool>,
     pub active: AtomicBool,
+    pub render_ref: Arc<RenderRef>,
+    pub aec_wanted: Arc<AtomicBool>,
+    pub aec_epoch: AtomicU64,
+    pub out_rate: AtomicU32,
 }
 
 impl Shared {
@@ -70,8 +75,8 @@ impl Shared {
         Ok(Self {
             controls: Arc::new(Controls {
                 muted: AtomicBool::new(false),
-                input_vol: std::sync::atomic::AtomicU32::new(100),
-                output_vol: std::sync::atomic::AtomicU32::new(100),
+                input_vol: AtomicU32::new(100),
+                output_vol: AtomicU32::new(100),
             }),
             meters: Arc::new(Meters::default()),
             jitter: Arc::new(Mutex::new(VecDeque::new())),
@@ -79,6 +84,10 @@ impl Shared {
             out_resampler: Mutex::new(None),
             tone_active: Arc::new(AtomicBool::new(false)),
             active: AtomicBool::new(false),
+            render_ref: Arc::new(RenderRef::new(FRAME_SAMPLES * 8)),
+            aec_wanted: Arc::new(AtomicBool::new(false)),
+            aec_epoch: AtomicU64::new(0),
+            out_rate: AtomicU32::new(SAMPLE_RATE),
         })
     }
 }
@@ -117,15 +126,26 @@ impl CallSink {
         })
     }
 
-    pub(crate) fn process(&mut self, chunk: &[i16]) {
+    pub(crate) fn process(
+        &mut self,
+        chunk: &[i16],
+        mut aec: Option<&mut Aec>,
+        render_ref: &RenderRef,
+    ) {
         match self.resampler.as_mut() {
             Some(r) => self.buf.extend_from_slice(&r.process(chunk)),
             None => self.buf.extend_from_slice(chunk),
         }
         while self.buf.len() >= FRAME_SAMPLES {
             let mut frame: Vec<i16> = self.buf.drain(..FRAME_SAMPLES).collect();
+            if let Some(a) = aec.as_mut() {
+                let mut r = Vec::new();
+                render_ref.drain_into(&mut r);
+                a.feed_render(&r); // far-end first
+                a.process_capture(&mut frame); // then cancel in place — ALWAYS, before mute
+            }
             if self.controls.muted.load(Ordering::Relaxed) {
-                continue;
+                continue; // mute affects transmit only
             }
             crate::audio::apply_gain(&mut frame, self.controls.input_vol.load(Ordering::Relaxed));
             match self.enc.encode(&frame, &mut self.enc_buf) {
@@ -362,7 +382,11 @@ fn open_streams(
         shared.controls.clone(),
         shared.meters.clone(),
         shared.tone_active.clone(),
+        shared.render_ref.clone(),
+        shared.aec_wanted.clone(),
     )?;
+
+    shared.out_rate.store(out_rate, Ordering::Relaxed);
 
     *shared.out_resampler.lock().unwrap() = if out_rate != SAMPLE_RATE {
         Some(MonoResampler::new(SAMPLE_RATE, out_rate)?)
@@ -375,10 +399,29 @@ fn open_streams(
 
     {
         let sink_slot = sink_slot.clone();
+        let shared = shared.clone();
         thread::spawn(move || {
+            let mut aec: Option<Aec> = None;
+            // force a sync on the first chunk regardless of the current epoch
+            let mut epoch = shared.aec_epoch.load(Ordering::Relaxed).wrapping_sub(1);
             while let Ok(chunk) = pcm_rx.recv() {
+                let cur = shared.aec_epoch.load(Ordering::Acquire);
+                if cur != epoch {
+                    epoch = cur;
+                    aec = if shared.aec_wanted.load(Ordering::Relaxed) {
+                        match Aec::new(shared.out_rate.load(Ordering::Relaxed)) {
+                            Ok(a) => Some(a),
+                            Err(e) => {
+                                log::warn!("audio: AEC unavailable: {e}; continuing without");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                }
                 if let Some(sink) = sink_slot.lock().unwrap().as_mut() {
-                    sink.process(&chunk);
+                    sink.process(&chunk, aec.as_mut(), &shared.render_ref);
                 }
             }
         });
@@ -441,6 +484,13 @@ fn build_call_sink(
     CallSink::new(in_rate, shared.controls.clone(), send)
 }
 
+/// Flip whether a live call wants AEC and bump the epoch so the capture-pump
+/// thread (re)builds or drops its thread-local `Aec` on the next mic chunk.
+fn set_aec_wanted(shared: &Arc<Shared>, wanted: bool) {
+    shared.aec_wanted.store(wanted, Ordering::Relaxed);
+    shared.aec_epoch.fetch_add(1, Ordering::Release);
+}
+
 /// Apply a device change by reopening the streams (Phase 2 is not seamless). No-op when
 /// streams aren't open (selection then applies on the next StartTest/StartCall).
 #[allow(clippy::too_many_arguments)]
@@ -473,6 +523,8 @@ fn reopen(
     if !ensure_open(shared, sink_slot, streams, in_rate, in_dev, out_dev, on_event) {
         return; // open failed; Unavailable already emitted
     }
+
+    set_aec_wanted(shared, call.is_some());
 
     // Rebuild the call sink for the new input rate if a call is active.
     if let Some((sock, peer)) = call.as_ref() {
@@ -507,6 +559,7 @@ fn engine_loop(
             }
             AudioCmd::StopTest => {
                 *sink_slot.lock().unwrap() = None;
+                set_aec_wanted(&shared, false);
                 shared.tone_active.store(false, Ordering::Relaxed);
                 shared.active.store(false, Ordering::Relaxed);
                 streams = None;
@@ -521,6 +574,7 @@ fn engine_loop(
                 ) {
                     continue;
                 }
+                set_aec_wanted(&shared, true);
                 call = sock.try_clone().ok().map(|s| (s, peer));
                 match build_call_sink(&shared, in_rate, sock, peer) {
                     Ok(sink) => {
@@ -532,6 +586,7 @@ fn engine_loop(
             }
             AudioCmd::EndCall => {
                 *sink_slot.lock().unwrap() = None;
+                set_aec_wanted(&shared, false);
                 call = None;
             }
             AudioCmd::SetInputDevice(name) => {
@@ -557,6 +612,7 @@ fn engine_loop(
             }
             AudioCmd::Shutdown => {
                 *sink_slot.lock().unwrap() = None;
+                set_aec_wanted(&shared, false);
                 shared.active.store(false, Ordering::Relaxed);
                 drop(streams.take());
                 return;
@@ -568,7 +624,6 @@ fn engine_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicU32;
 
     fn test_controls() -> Arc<Controls> {
         Arc::new(Controls {
@@ -588,7 +643,8 @@ mod tests {
             Box::new(move |bytes: &[u8]| sink_got.lock().unwrap().push(bytes.len())),
         )
         .unwrap();
-        sink.process(&vec![0i16; FRAME_SAMPLES * 2]);
+        let rr = RenderRef::new(960);
+        sink.process(&vec![0i16; FRAME_SAMPLES * 2], None, &rr);
         let lens = got.lock().unwrap();
         assert_eq!(lens.len(), 2, "expected two encoded packets");
         assert!(lens.iter().all(|&n| n > 0), "encoded packets must be non-empty");
@@ -606,7 +662,8 @@ mod tests {
             Box::new(move |_b: &[u8]| *sink_got.lock().unwrap() += 1),
         )
         .unwrap();
-        sink.process(&vec![1234i16; FRAME_SAMPLES * 2]);
+        let rr = RenderRef::new(960);
+        sink.process(&vec![1234i16; FRAME_SAMPLES * 2], None, &rr);
         assert_eq!(*got.lock().unwrap(), 0);
     }
 

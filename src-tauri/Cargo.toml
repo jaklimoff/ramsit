@@ -29,6 +29,11 @@ log = "0.4"
 opus = "0.3"
 stunclient = "0.4"
 rubato = "0.16"
+aec3 = { version = "0.3", optional = true }
+
+[features]
+default = ["aec"]
+aec = ["dep:aec3"]
 
 [target."cfg(target_os = \"macos\")".dependencies]
 window-vibrancy = "0.5"

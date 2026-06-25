@@ -196,14 +196,16 @@ pub(crate) fn build_output(
     controls: Arc<Controls>,
     meters: Arc<Meters>,
     tone_active: Arc<AtomicBool>,
+    render_ref: Arc<RenderRef>,
+    aec_wanted: Arc<AtomicBool>,
 ) -> Result<cpal::Stream> {
     match fmt {
-        SampleFormat::F32 => {
-            output_stream::<f32>(dev, cfg, channels, rate, jitter, controls, meters, tone_active)
-        }
-        SampleFormat::I16 => {
-            output_stream::<i16>(dev, cfg, channels, rate, jitter, controls, meters, tone_active)
-        }
+        SampleFormat::F32 => output_stream::<f32>(
+            dev, cfg, channels, rate, jitter, controls, meters, tone_active, render_ref, aec_wanted,
+        ),
+        SampleFormat::I16 => output_stream::<i16>(
+            dev, cfg, channels, rate, jitter, controls, meters, tone_active, render_ref, aec_wanted,
+        ),
         other => Err(anyhow!("unsupported output sample format {other:?}")),
     }
 }
@@ -218,17 +220,22 @@ fn output_stream<T>(
     controls: Arc<Controls>,
     meters: Arc<Meters>,
     tone_active: Arc<AtomicBool>,
+    render_ref: Arc<RenderRef>,
+    aec_wanted: Arc<AtomicBool>,
 ) -> Result<cpal::Stream>
 where
     T: SizedSample + FromSample<i16>,
 {
     let mut playing = false; // owned by this FnMut; latches once primed
     let mut tone = ToneGen::new(440.0, rate);
+    let mut render_scratch: Vec<i16> = Vec::with_capacity(2048);
     let stream = dev.build_output_stream(
         cfg,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let gain = controls.output_vol.load(Ordering::Relaxed);
             let toning = tone_active.load(Ordering::Relaxed);
+            let feed = aec_wanted.load(Ordering::Relaxed);
+            render_scratch.clear();
             let mut jb = jitter.lock().unwrap();
             if !playing && jb.len() >= JITTER_PRIME {
                 playing = true;
@@ -241,7 +248,7 @@ where
                     match jb.pop_front() {
                         Some(s) => gain_sample(s, gain),
                         None => {
-                            playing = false; // underran; re-prime before next burst
+                            playing = false;
                             0
                         }
                     }
@@ -249,10 +256,17 @@ where
                     0
                 };
                 peak = peak.max((sample as i32).unsigned_abs());
+                if feed {
+                    render_scratch.push(sample);
+                }
                 let out = T::from_sample(sample);
                 for o in frame.iter_mut() {
                     *o = out;
                 }
+            }
+            drop(jb);
+            if feed {
+                render_ref.push_slice(&render_scratch);
             }
             meters.record_output(peak);
         },
@@ -260,6 +274,40 @@ where
         None,
     )?;
     Ok(stream)
+}
+
+/// Bounded handoff of the post-gain output (render reference) to the capture-pump
+/// thread. Mirrors the `jitter` buffer pattern. Drops oldest on overflow (overflow
+/// means the pump stalled — anomalous).
+pub(crate) struct RenderRef {
+    q: Mutex<VecDeque<i16>>,
+    cap: usize,
+}
+
+impl RenderRef {
+    pub(crate) fn new(cap: usize) -> Self {
+        Self { q: Mutex::new(VecDeque::new()), cap }
+    }
+
+    /// Push a callback's worth of mono samples; one lock per callback.
+    pub(crate) fn push_slice(&self, samples: &[i16]) {
+        if samples.is_empty() {
+            return;
+        }
+        let mut q = self.q.lock().unwrap();
+        for &s in samples {
+            if q.len() >= self.cap {
+                q.pop_front();
+            }
+            q.push_back(s);
+        }
+    }
+
+    /// Move all available samples into `out` (appends; non-blocking).
+    pub(crate) fn drain_into(&self, out: &mut Vec<i16>) {
+        let mut q = self.q.lock().unwrap();
+        out.extend(q.drain(..));
+    }
 }
 
 #[cfg(test)]
@@ -348,5 +396,31 @@ mod tests {
         let mut dec_buf = [0i16; FRAME_SAMPLES];
         let m = dec.decode(&enc_buf[..n], &mut dec_buf, false).unwrap();
         assert_eq!(m, FRAME_SAMPLES);
+    }
+
+    #[test]
+    fn render_ref_push_then_drain() {
+        let r = RenderRef::new(100);
+        r.push_slice(&[1, 2, 3]);
+        let mut out = Vec::new();
+        r.drain_into(&mut out);
+        assert_eq!(out, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn render_ref_drops_oldest_over_cap() {
+        let r = RenderRef::new(3);
+        r.push_slice(&[1, 2, 3, 4, 5]);
+        let mut out = Vec::new();
+        r.drain_into(&mut out);
+        assert_eq!(out, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn render_ref_drain_empty_is_empty() {
+        let r = RenderRef::new(10);
+        let mut out = vec![9];
+        r.drain_into(&mut out);
+        assert_eq!(out, vec![9], "drain appends nothing when empty");
     }
 }
