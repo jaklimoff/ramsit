@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/jaklimoff/ramsit/compare/v0.3.0...v0.4.0) (2026-06-29)
+
+
+### Features
+
+* add update button to re-punch the hole ([e9cf84c](https://github.com/jaklimoff/ramsit/commit/e9cf84c6f0f85dab6f70e214ab4167df9098fa50))
+
 # [0.3.0](https://github.com/jaklimoff/ramsit/compare/v0.2.0...v0.3.0) (2026-06-25)
 
 
