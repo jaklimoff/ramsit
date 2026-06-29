@@ -25,6 +25,7 @@ export function onEngineEvent(cb: (e: EngineEvent) => void): Promise<UnlistenFn>
 export const engine = {
   start: () => invoke<void>("start"),
   submitPeerCode: (code: string) => invoke<void>("submit_peer_code", { code }),
+  refresh: () => invoke<void>("refresh"),
   sendMessage: (text: string) => invoke<void>("send_message", { text }),
   toggleMute: () => invoke<void>("toggle_mute"),
   setInputVolume: (pct: number) => invoke<void>("set_input_volume", { pct }),

@@ -26,7 +26,9 @@ export const initialState: Screen = { kind: "discovering" };
 export function reduce(state: Screen, action: Action): Screen {
   switch (action.type) {
     case "discovered":
-      return state.kind === "discovering"
+      // First discovery enters Exchange; a later one (manual Refresh) updates
+      // the codes in place. Ignore once we've moved past Exchange.
+      return state.kind === "discovering" || state.kind === "exchange"
         ? { kind: "exchange", myCode: action.code, localCode: action.localCode }
         : state;
     case "connected":

@@ -16,6 +16,9 @@ use stunclient::StunClient;
 pub enum Command {
     PeerCode(SocketAddr),
     Send(String),
+    /// Re-query STUN on the live socket to refresh the NAT mapping and re-emit
+    /// our code (the punched hole degrades while we wait idle for a peer).
+    Refresh,
     Quit,
 }
 
@@ -79,6 +82,19 @@ pub fn discover(sock: &UdpSocket, stun: SocketAddr) -> Result<SocketAddr> {
     ))
 }
 
+/// Re-query STUN on `sock`, pair our LAN IP with the bound port, and emit a
+/// fresh `Discovered`. Used for the initial announce and the manual refresh.
+fn discover_and_emit(sock: &UdpSocket, stun: SocketAddr, events: &Sender<Event>) -> Result<()> {
+    let public = discover(sock, stun)?;
+    info!("stun: discovered public endpoint {public}");
+    // Pair the LAN IP with our actual bound port so a same-network peer can punch
+    // straight to us without STUN/NAT.
+    let local = lan_ip().and_then(|ip| sock.local_addr().ok().map(|a| SocketAddr::new(ip, a.port())));
+    info!("lan: local endpoint {}", local.map(|a| a.to_string()).unwrap_or_else(|| "unavailable".into()));
+    let _ = events.send(Event::Discovered { public, local });
+    Ok(())
+}
+
 /// Spawn the network worker. Returns its join handle plus the channel ends the
 /// UI uses to command it and receive its events.
 pub fn spawn(
@@ -106,24 +122,21 @@ fn worker(stun: SocketAddr, audio: AudioEngineHandle, cmds: Receiver<Command>, e
             .unwrap_or_else(|_| "?".into())
     );
 
-    let my = match discover(&sock, stun) {
-        Ok(a) => a,
-        Err(e) => {
-            let _ = events.send(Event::Fatal(e.to_string()));
-            return;
-        }
-    };
-    info!("stun: discovered public endpoint {my}");
-    // Pair the LAN IP with our actual bound port so a same-network peer can punch
-    // straight to us without STUN/NAT.
-    let local = lan_ip().and_then(|ip| sock.local_addr().ok().map(|a| SocketAddr::new(ip, a.port())));
-    info!("lan: local endpoint {}", local.map(|a| a.to_string()).unwrap_or_else(|| "unavailable".into()));
-    let _ = events.send(Event::Discovered { public: my, local });
+    if let Err(e) = discover_and_emit(&sock, stun, &events) {
+        let _ = events.send(Event::Fatal(e.to_string()));
+        return;
+    }
 
-    // Wait for the peer code (or an early quit / UI gone).
+    // Wait for the peer code (or an early quit / UI gone). A Refresh re-queries
+    // STUN on the same socket to keep our advertised endpoint live.
     let code = loop {
         match cmds.recv() {
             Ok(Command::PeerCode(c)) => break c,
+            Ok(Command::Refresh) => {
+                if let Err(e) = discover_and_emit(&sock, stun, &events) {
+                    warn!("stun: refresh failed, keeping previous code: {e}");
+                }
+            }
             Ok(Command::Quit) | Err(_) => return,
             Ok(_) => {} // ignore Send before we're connected
         }
@@ -184,7 +197,7 @@ pub fn session(
                     }
                     return;
                 }
-                Ok(Command::PeerCode(_)) => {} // already connected; ignore
+                Ok(Command::PeerCode(_)) | Ok(Command::Refresh) => {} // already connected; ignore
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     let _ = sock.send_to(BYE, peer);

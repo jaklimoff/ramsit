@@ -6,17 +6,26 @@ function CodeLine({
   label,
   hint,
   value,
+  onRefresh,
 }: {
   label: string;
   hint: string;
   value: string;
+  onRefresh?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   function copy() {
     navigator.clipboard.writeText(value);
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
+  }
+
+  function refresh() {
+    onRefresh?.();
+    setUpdating(true);
+    setTimeout(() => setUpdating(false), 1500);
   }
 
   return (
@@ -26,6 +35,11 @@ function CodeLine({
       </span>
       <div className="code-pill">
         <code>{value}</code>
+        {onRefresh && (
+          <button className="btn tinted" onClick={refresh} disabled={updating}>
+            {updating ? "Updating…" : "Update"}
+          </button>
+        )}
         <button className="btn tinted" onClick={copy}>
           {copied ? "Copied" : "Copy"}
         </button>
@@ -64,7 +78,12 @@ export default function Exchange({
           <p className="subtle">Share your code, or connect to a peer.</p>
         </header>
 
-        <CodeLine label="Your code" hint="over the internet" value={myCode} />
+        <CodeLine
+          label="Your code"
+          hint="over the internet"
+          value={myCode}
+          onRefresh={engine.refresh}
+        />
         {localCode && (
           <CodeLine label="Local code" hint="same Wi-Fi / LAN" value={localCode} />
         )}

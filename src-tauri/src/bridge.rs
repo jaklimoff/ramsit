@@ -96,6 +96,11 @@ fn send_message(text: String, state: State<AppState>) {
 }
 
 #[tauri::command]
+fn refresh(state: State<AppState>) {
+    send(&state, Command::Refresh);
+}
+
+#[tauri::command]
 fn toggle_mute(app: AppHandle, state: State<AppState>) {
     let st = state.audio.toggle_mute();
     let _ = app.emit(EVENT_CHANNEL, audio_state_json(&st));
@@ -234,6 +239,7 @@ pub fn run() {
             start,
             submit_peer_code,
             send_message,
+            refresh,
             toggle_mute,
             set_input_volume,
             set_output_volume,
